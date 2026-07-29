@@ -55,5 +55,15 @@ Confirmed working for all 4 patch slots.
 
 ## Reference implementation
 
-- `desktop/spark_go_gui.py` — minimal desktop app (Tkinter + `bleak`). Scan, connect/disconnect, and patch switching only, with just enough logging (raw TX/RX, collapsed by default) to follow what's happening. Auto-scans on startup and auto-connects if exactly one device is found.
-- `web/index.html` — minimal single-file browser app (Web Bluetooth), same scope as the desktop app, no external dependencies.
+- **Desktop** (Tkinter + `bleak`), split by concern:
+  - `desktop/protocol.py` — GATT handles, message envelope, `build_patch_payload`, `fmt_hex`. No UI or I/O code.
+  - `desktop/ble_backend.py` — `BleBackend`: async BLE I/O on a background event-loop thread, reports back via a queue. No `tkinter` imports (see HANDOFF.md for why that boundary matters).
+  - `desktop/i18n.py` — key-based translations (`en`/`it`), OS-locale auto-detection, `SPARK_GO_LANG` env override.
+  - `desktop/spark_go_gui.py` — the Tkinter `App` and entry point; imports the three modules above.
+  - Scan, connect/disconnect, and patch switching only, with just enough logging (raw TX/RX, collapsed by default) to follow what's happening. Auto-scans on startup and auto-connects if exactly one device is found.
+- **Web** (Web Bluetooth), same scope as the desktop app, no external dependencies (no CDN, no build step):
+  - `web/index.html` — markup only, `data-i18n*` attributes mark translatable text.
+  - `web/css/style.css` — all styling.
+  - `web/js/protocol.js` — GATT UUIDs, `buildPatchPayload`, `fmtHex`.
+  - `web/js/i18n.js` — key-based translations (`en`/`it`), `navigator.language` auto-detection, `t()` + `applyStaticTranslations()`.
+  - `web/js/app.js` — UI wiring and BLE glue; loaded last, after `i18n.js` and `protocol.js`.
