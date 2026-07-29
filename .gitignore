@@ -1,0 +1,6 @@
+.claude/
+HANDOFF.md
+spark_diagnostic.py
+desktop/.spark_go_seq_state.json
+__pycache__/
+*.pyc

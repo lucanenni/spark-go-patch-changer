@@ -1,0 +1,391 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Spark GO GUI</title>
+<style>
+  :root{
+    --font-display: "Arial Narrow", "Helvetica Neue Condensed", "Segoe UI Semibold", Arial, sans-serif;
+    --font-mono: ui-monospace, "SF Mono", "Cascadia Code", "Consolas", "Liberation Mono", Menlo, monospace;
+    --bg: #16171b;
+    --panel: #1e2025;
+    --panel-raised: #24262c;
+    --line: #34363d;
+    --text: #e6e8eb;
+    --muted: #8b909b;
+    --amber: #ffb020;
+    --amber-dim: #7a5a1f;
+    --red: #ef5b5b;
+    --green: #6fcf7a;
+    --radius: 3px;
+  }
+  *{ box-sizing: border-box; }
+  body{
+    margin:0;
+    background: radial-gradient(ellipse at 50% -10%, #202227 0%, var(--bg) 55%);
+    color: var(--text);
+    font-family: var(--font-mono);
+    min-height:100vh;
+    padding: 28px 16px 60px;
+  }
+  .rack{ max-width: 760px; margin: 0 auto; }
+  header{
+    display:flex; align-items:baseline; justify-content:space-between;
+    border-bottom: 1px solid var(--line); padding-bottom: 14px; margin-bottom: 20px;
+  }
+  h1{
+    font-family: var(--font-display); font-weight:700; font-size: 22px;
+    letter-spacing: 0.14em; text-transform: uppercase; margin:0; color: var(--text);
+  }
+  h1 span{ color: var(--amber); }
+  .subtitle{ font-size: 11px; color: var(--muted); letter-spacing: 0.08em; text-transform: uppercase; }
+  .led-row{ display:flex; align-items:center; gap:8px; }
+  .led{ width:9px; height:9px; border-radius:50%; background: var(--muted); box-shadow: inset 0 0 2px #000; }
+  .led.on{ background: var(--green); box-shadow: 0 0 8px var(--green), inset 0 0 2px #033; }
+  .led.err{ background: var(--red); box-shadow: 0 0 8px var(--red); }
+  .led.busy{ background: var(--amber); box-shadow: 0 0 8px var(--amber); animation: pulse 1s infinite; }
+  @keyframes pulse{ 50%{ opacity:.35; } }
+  .status-text{ font-size: 11px; color: var(--muted); letter-spacing:0.05em; }
+
+  .panel{
+    background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+    padding: 16px 18px; margin-bottom: 16px; position: relative;
+  }
+  .panel::before{
+    content: attr(data-label); position:absolute; top:-9px; left:12px;
+    background: var(--bg); padding: 0 6px; font-family: var(--font-display);
+    font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--muted);
+  }
+
+  .row{ display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin-bottom:10px; }
+  .row:last-child{ margin-bottom:0; }
+  label{ font-size:11px; color:var(--muted); letter-spacing:0.04em; white-space:nowrap; }
+  input[type=text]{
+    background: var(--panel-raised); border: 1px solid var(--line); color: var(--text);
+    font-family: var(--font-mono); font-size: 12px; padding: 7px 9px; border-radius: var(--radius); outline:none;
+  }
+  input[type=text]:focus{ border-color: var(--amber-dim); }
+  input.filter{ width: 160px; }
+
+  button{
+    background: var(--panel-raised); border: 1px solid var(--line); color: var(--text);
+    font-family: var(--font-display); font-weight:600; font-size: 11px; letter-spacing: 0.08em;
+    text-transform: uppercase; padding: 8px 14px; border-radius: var(--radius); cursor: pointer;
+    transition: border-color .15s, color .15s;
+  }
+  button:hover:not(:disabled){ border-color: var(--amber-dim); color: var(--amber); }
+  button:active:not(:disabled){ transform: translateY(1px); }
+  button:disabled{ opacity:.4; cursor:not-allowed; }
+  button.primary{ border-color: var(--amber-dim); color: var(--amber); }
+  button.danger:hover:not(:disabled){ border-color: #7a2c2c; color: var(--red); }
+
+  select{
+    background: var(--panel-raised); border: 1px solid var(--line); color: var(--text);
+    font-family: var(--font-mono); font-size: 12px; padding: 7px 9px; border-radius: var(--radius);
+    flex: 1; min-width: 200px;
+  }
+
+  .footswitches{ display:flex; gap:12px; }
+  .fsw{
+    flex:1; display:flex; flex-direction:column; align-items:center; gap:8px;
+    background: var(--panel-raised); border: 1px solid var(--line); border-radius: 50%;
+    aspect-ratio: 1; justify-content:center; cursor:pointer; font-family: var(--font-display);
+    font-weight:700; font-size: 20px; color: var(--text); transition: box-shadow .1s, border-color .1s;
+  }
+  .fsw:hover:not(:disabled){ border-color: var(--amber-dim); }
+  .fsw:active:not(:disabled){ box-shadow: 0 0 0 3px var(--amber-dim) inset; }
+  .fsw:disabled{ opacity:.35; cursor:not-allowed; }
+  .fsw .dot{ width:7px; height:7px; border-radius:50%; background: var(--muted); }
+  .fsw.flash .dot{ background: var(--amber); box-shadow: 0 0 8px var(--amber); }
+
+  .log-panel{
+    background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+    margin-bottom: 16px;
+  }
+  .log-panel summary{
+    cursor: pointer; padding: 10px 14px; font-family: var(--font-display);
+    font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase;
+    color: var(--muted); outline: none; list-style: none;
+  }
+  .log-panel summary::-webkit-details-marker{ display: none; }
+  .log-panel summary::before{ content: "\25b8  "; }
+  .log-panel[open] summary::before{ content: "\25be  "; }
+  .log-panel[open] summary{ border-bottom: 1px solid var(--line); }
+  #log{
+    background: #101114; margin: 12px 14px 14px; border: 1px solid var(--line); border-radius: var(--radius);
+    height: 260px; overflow-y: auto; padding: 10px 12px; font-size: 11.5px;
+    line-height: 1.6; white-space: pre-wrap; word-break: break-all;
+  }
+  .l-tx{ color: var(--amber); }
+  .l-rx{ color: var(--muted); }
+  .l-err{ color: var(--red); }
+  .l-info{ color: var(--muted); }
+
+  a{ color: var(--amber); }
+</style>
+</head>
+<body>
+<div class="rack">
+
+  <header>
+    <div>
+      <h1>Spark<span>GO</span> GUI</h1>
+      <div class="subtitle">BLE control panel - Web Bluetooth</div>
+    </div>
+    <div class="led-row">
+      <div class="led" id="statusLed"></div>
+      <div class="status-text" id="statusText">Ready</div>
+    </div>
+  </header>
+
+  <div class="panel" data-label="BLE connection">
+    <div class="row">
+      <label>Name filter</label>
+      <input type="text" id="nameFilter" class="filter" value="Spark">
+      <button id="btnScan" class="primary">Scan</button>
+    </div>
+    <div class="row">
+      <select id="deviceSelect" disabled>
+        <option value="">- no device selected -</option>
+      </select>
+      <button id="btnConnect" disabled>Connect</button>
+      <button id="btnDisconnect" class="danger" disabled>Disconnect</button>
+    </div>
+  </div>
+
+  <div class="panel" data-label="Send patch">
+    <div class="footswitches">
+      <button class="fsw" data-patch="1" disabled><span class="dot"></span>1</button>
+      <button class="fsw" data-patch="2" disabled><span class="dot"></span>2</button>
+      <button class="fsw" data-patch="3" disabled><span class="dot"></span>3</button>
+      <button class="fsw" data-patch="4" disabled><span class="dot"></span>4</button>
+    </div>
+  </div>
+
+  <details class="log-panel">
+    <summary>Log</summary>
+    <div id="log"></div>
+  </details>
+
+</div>
+
+<script>
+"use strict";
+
+// ---- Spark GO GATT profile ----
+const SERVICE_UUID = "0000ffc0-0000-1000-8000-00805f9b34fb";
+const WRITE_CHAR_UUID = "0000ffc1-0000-1000-8000-00805f9b34fb";  // write / write-without-response / read
+const NOTIFY_CHAR_UUID = "0000ffc2-0000-1000-8000-00805f9b34fb"; // notify / read
+
+// ---- Protocol ----
+const PRESET_HEADER = new Uint8Array([0x01,0xFE,0x00,0x00,0x53,0xFE,0x1A,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00]);
+let seq = 0x20;
+
+function buildPatchPayload(patchNumber){
+  if (![1,2,3,4].includes(patchNumber)) throw new Error("patchNumber must be 1..4");
+  const patchId = patchNumber - 1;
+  const inner = new Uint8Array([0xF0, 0x01, seq & 0xFF, patchId, 0x01, 0x38, 0x00, 0x00, patchId, 0xF7]);
+  seq = (seq + 1) & 0xFF;
+  const payload = new Uint8Array(PRESET_HEADER.length + inner.length);
+  payload.set(PRESET_HEADER, 0);
+  payload.set(inner, PRESET_HEADER.length);
+  return payload;
+}
+
+function fmtHex(bytes){
+  return Array.from(bytes).map(b => b.toString(16).toUpperCase().padStart(2,"0")).join(" ");
+}
+
+// ---- UI state ----
+const els = {
+  statusLed: document.getElementById("statusLed"),
+  statusText: document.getElementById("statusText"),
+  nameFilter: document.getElementById("nameFilter"),
+  btnScan: document.getElementById("btnScan"),
+  deviceSelect: document.getElementById("deviceSelect"),
+  btnConnect: document.getElementById("btnConnect"),
+  btnDisconnect: document.getElementById("btnDisconnect"),
+  log: document.getElementById("log"),
+  patchButtons: Array.from(document.querySelectorAll(".fsw")),
+};
+
+let currentDevice = null;
+let gattServer = null;
+let writeChar = null;
+let notifyChar = null;
+
+function log(text, cls){
+  const line = document.createElement("div");
+  if (cls) line.className = cls;
+  line.textContent = text;
+  els.log.appendChild(line);
+  els.log.scrollTop = els.log.scrollHeight;
+}
+
+function setStatus(text, mode){
+  els.statusText.textContent = text;
+  els.statusLed.className = "led" + (mode ? " " + mode : "");
+}
+
+function setConnectedUi(connected){
+  els.btnConnect.disabled = connected || !els.deviceSelect.value;
+  els.btnDisconnect.disabled = !connected;
+  els.patchButtons.forEach(b => b.disabled = !connected);
+}
+
+// ---- Scan ----
+els.btnScan.addEventListener("click", async () => {
+  if (!navigator.bluetooth){
+    log("Web Bluetooth is not available in this browser (use Chrome/Edge on desktop or Android, over HTTPS).", "l-err");
+    setStatus("Not supported", "err");
+    return;
+  }
+  const namePrefix = els.nameFilter.value.trim();
+
+  try{
+    setStatus("Selecting device...", "busy");
+    log("Opening Bluetooth device picker...", "l-info");
+
+    const filters = namePrefix ? [{ namePrefix }] : undefined;
+    const device = await navigator.bluetooth.requestDevice(filters
+      ? { filters, optionalServices: [SERVICE_UUID] }
+      : { acceptAllDevices: true, optionalServices: [SERVICE_UUID] }
+    );
+
+    currentDevice = device;
+    els.deviceSelect.innerHTML = "";
+    const opt = document.createElement("option");
+    opt.value = device.id;
+    opt.textContent = device.name || "(unnamed)";
+    els.deviceSelect.appendChild(opt);
+    els.deviceSelect.disabled = false;
+    els.deviceSelect.value = device.id;
+    els.btnConnect.disabled = false;
+
+    log(`Selected: ${device.name || "(unnamed)"} [${device.id}]`, "l-info");
+    setStatus("Ready", null);
+  } catch(e){
+    if (e.name === "NotFoundError"){
+      log("Selection cancelled.", "l-info");
+      setStatus("Ready", null);
+    } else {
+      log(`Device selection error: ${e.name}: ${e.message}`, "l-err");
+      setStatus("Error", "err");
+    }
+  }
+});
+
+// ---- Connect ----
+async function connectToDevice(device){
+  try{
+    setStatus(`Connecting to ${device.name}...`, "busy");
+    log(`Connecting to ${device.name}...`, "l-info");
+
+    device.addEventListener("gattserverdisconnected", onDisconnected);
+    gattServer = await device.gatt.connect();
+
+    const service = await gattServer.getPrimaryService(SERVICE_UUID);
+    writeChar = await service.getCharacteristic(WRITE_CHAR_UUID);
+    notifyChar = await service.getCharacteristic(NOTIFY_CHAR_UUID);
+
+    await notifyChar.startNotifications();
+    notifyChar.addEventListener("characteristicvaluechanged", (ev) => {
+      const raw = new Uint8Array(ev.target.value.buffer);
+      log(`RX: ${fmtHex(raw)}`, "l-rx");
+    });
+
+    log(`Connected to ${device.name}`, "l-info");
+    setStatus("Connected", "on");
+    setConnectedUi(true);
+  } catch(e){
+    log(`Connection error: ${e.name}: ${e.message}`, "l-err");
+    setStatus("Error", "err");
+    setConnectedUi(false);
+  }
+}
+
+els.btnConnect.addEventListener("click", () => {
+  if (!currentDevice) return;
+  connectToDevice(currentDevice);
+});
+
+// ---- Disconnect ----
+els.btnDisconnect.addEventListener("click", () => {
+  if (currentDevice && currentDevice.gatt.connected){
+    currentDevice.gatt.disconnect();
+  }
+});
+
+function onDisconnected(){
+  writeChar = null;
+  notifyChar = null;
+  log("Disconnected.", "l-info");
+  setStatus("Disconnected", null);
+  setConnectedUi(false);
+}
+
+// ---- Send patch ----
+els.patchButtons.forEach(btn => {
+  btn.addEventListener("click", async () => {
+    const n = parseInt(btn.dataset.patch, 10);
+    if (!writeChar){
+      log("Not connected.", "l-err");
+      return;
+    }
+    try{
+      const payload = buildPatchPayload(n);
+      if (writeChar.properties.writeWithoutResponse){
+        await writeChar.writeValueWithoutResponse(payload);
+      } else {
+        await writeChar.writeValue(payload);
+      }
+      log(`TX (patch ${n}): ${fmtHex(payload)}`, "l-tx");
+      btn.classList.add("flash");
+      setTimeout(() => btn.classList.remove("flash"), 180);
+    } catch(e){
+      log(`Send patch ${n} failed: ${e.name}: ${e.message}`, "l-err");
+    }
+  });
+});
+
+setConnectedUi(false);
+
+// ---- Auto-reconnect on load ----
+// Web Bluetooth can never auto-open the device picker (navigator.bluetooth.requestDevice
+// always requires a fresh user gesture, by design - no way around that). But if the user
+// has already granted access to a device at least once before (via Scan), Chrome remembers
+// it and navigator.bluetooth.getDevices() can return it without a new prompt, letting us
+// reconnect automatically. Support for getDevices() varies by browser/version.
+(async () => {
+  if (!navigator.bluetooth || !navigator.bluetooth.getDevices){
+    log("Waiting for scan. (Auto-reconnect needs a browser that supports navigator.bluetooth.getDevices - use the Scan button.)", "l-info");
+    return;
+  }
+  try{
+    const known = await navigator.bluetooth.getDevices();
+    if (known.length === 1){
+      const device = known[0];
+      currentDevice = device;
+      els.deviceSelect.innerHTML = "";
+      const opt = document.createElement("option");
+      opt.value = device.id;
+      opt.textContent = device.name || "(unnamed)";
+      els.deviceSelect.appendChild(opt);
+      els.deviceSelect.disabled = false;
+      els.deviceSelect.value = device.id;
+      els.btnConnect.disabled = false;
+      log(`Remembered device found: ${device.name || "(unnamed)"} - auto-connecting...`, "l-info");
+      await connectToDevice(device);
+    } else if (known.length > 1){
+      log(`${known.length} remembered devices found - pick one manually via Scan.`, "l-info");
+    } else {
+      log("Waiting for scan.", "l-info");
+    }
+  } catch(e){
+    log("Waiting for scan.", "l-info");
+  }
+})();
+</script>
+</body>
+</html>
