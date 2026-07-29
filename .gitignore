@@ -4,3 +4,5 @@ spark_diagnostic.py
 desktop/.spark_go_seq_state.json
 __pycache__/
 *.pyc
+.DS_Store
+**/.DS_Store
