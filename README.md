@@ -18,8 +18,10 @@ See [PROTOCOL.md](PROTOCOL.md) for the protocol reference.
   firmware bridging an MVave Chocolate Plus MIDI pedal (USB-MIDI) to the Spark GO
   (BLE): patch switching, effect toggling, and tuner display.
 
-Both clients auto-detect the system/browser language (English/Italian for now) for
-all user-visible text; see `i18n.py` / `js/i18n.js` to add more languages.
+The desktop and web clients auto-detect the system/browser language
+(English/Italian for now) for all user-visible text; see `i18n.py` / `js/i18n.js`
+to add more languages. The ESP32 firmware doesn't have localization (fixed
+English strings on its small screen).
 
 This is intentionally a small starting point. Other capabilities (individual effect
 toggling, reading a preset's full pedal chain, live-state tracking) are being
