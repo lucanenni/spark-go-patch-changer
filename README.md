@@ -13,6 +13,9 @@ See [PROTOCOL.md](PROTOCOL.md) for the protocol reference.
 - `web/` — minimal browser app (Web Bluetooth), same scope, no external dependencies,
   split into `index.html`, `css/style.css`, and `js/protocol.js` / `js/i18n.js` /
   `js/app.js`.
+- [`ESP32-S3-ChocolatePlus-bridge/`](ESP32-S3-ChocolatePlus-bridge/) — ESP32-S3 dongle
+  firmware bridging an MVave Chocolate Plus MIDI pedal (USB-MIDI) to the Spark GO
+  (BLE): patch switching, effect toggling, and tuner display.
 
 Both clients auto-detect the system/browser language (English/Italian for now) for
 all user-visible text; see `i18n.py` / `js/i18n.js` to add more languages.
