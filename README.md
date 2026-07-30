@@ -16,7 +16,9 @@ See [PROTOCOL.md](PROTOCOL.md) for the protocol reference.
   `js/app.js`.
 - [`ESP32-S3-ChocolatePlus-bridge/`](ESP32-S3-ChocolatePlus-bridge/) — ESP32-S3 dongle
   firmware bridging an MVave Chocolate Plus MIDI pedal (USB-MIDI) to the Spark GO
-  (BLE): patch switching, effect toggling, and tuner display.
+  (BLE): patch switching, effect toggling, and tuner display. Flash it from a
+  browser, no software install, at **[the web flash tool](https://lucanenni.github.io/spark-go-utils/)**
+  (Chrome/Edge/Opera on a computer only - uses Web Serial).
 
 The desktop and web clients auto-detect the system/browser language
 (English/Italian for now) for all user-visible text; see `i18n.py` / `js/i18n.js`
