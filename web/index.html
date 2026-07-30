@@ -53,6 +53,34 @@
     </div>
   </div>
 
+  <div class="panel" data-label="Tuner" data-i18n-label="panel_tuner">
+    <div class="row">
+      <button id="btnTunerOn" class="primary" disabled data-i18n="btn_tuner_on">Tuner ON</button>
+      <button id="btnTunerOff" class="danger" disabled data-i18n="btn_tuner_off">Tuner OFF</button>
+    </div>
+  </div>
+
+  <div class="panel" data-label="Tuner display (raw, uncalibrated)" data-i18n-label="panel_tuner_display">
+    <div class="tuner-display">
+      <div class="tuner-note idle" id="tunerNote">&mdash;</div>
+      <div class="tuner-gauge">
+        <div class="tuner-bar">
+          <div class="zone"></div>
+          <div class="tick" style="left:0%"></div>
+          <div class="tick" style="left:25%"></div>
+          <div class="tick" style="left:50%"></div>
+          <div class="tick" style="left:75%"></div>
+          <div class="tick" style="left:100%"></div>
+          <div class="needle" id="tunerNeedle"></div>
+        </div>
+        <div class="tuner-scale">
+          <span>-50</span><span>-25</span><span>0</span><span>+25</span><span>+50</span>
+        </div>
+        <div class="tuner-raw" id="tunerRaw" data-i18n="tuner_no_signal">no signal</div>
+      </div>
+    </div>
+  </div>
+
   <details class="log-panel">
     <summary data-i18n="log_title">Log</summary>
     <div id="log"></div>

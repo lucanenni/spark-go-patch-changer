@@ -12,6 +12,11 @@ const els = {
   btnDisconnect: document.getElementById("btnDisconnect"),
   log: document.getElementById("log"),
   patchButtons: Array.from(document.querySelectorAll(".fsw")),
+  btnTunerOn: document.getElementById("btnTunerOn"),
+  btnTunerOff: document.getElementById("btnTunerOff"),
+  tunerNote: document.getElementById("tunerNote"),
+  tunerNeedle: document.getElementById("tunerNeedle"),
+  tunerRaw: document.getElementById("tunerRaw"),
 };
 
 let currentDevice = null;
@@ -54,6 +59,38 @@ function setConnectedUi(connected){
   els.btnConnect.disabled = connected || !els.deviceSelect.value;
   els.btnDisconnect.disabled = !connected;
   els.patchButtons.forEach(b => b.disabled = !connected);
+  els.btnTunerOn.disabled = !connected;
+  els.btnTunerOff.disabled = !connected;
+  if (!connected) resetTunerDisplay();
+}
+
+// ---- Tuner display ----
+function resetTunerDisplay(){
+  els.tunerNote.textContent = "—";
+  els.tunerNote.classList.add("idle");
+  els.tunerNeedle.style.left = "50%";
+  els.tunerNeedle.classList.remove("centered");
+  els.tunerRaw.textContent = t("tuner_no_signal");
+}
+
+function updateTunerDisplay(bytes){
+  const parsed = parseTunerFrame(bytes);
+  if (!parsed) return; // Not a tuner data frame (e.g. an ack for some other command).
+  if (parsed.idle){
+    resetTunerDisplay();
+    return;
+  }
+  els.tunerNote.textContent = parsed.noteName;
+  els.tunerNote.classList.remove("idle");
+  const clampedCents = Math.max(-50, Math.min(50, parsed.cents));
+  const leftPct = 50 + (clampedCents / 50) * 50;
+  els.tunerNeedle.style.left = leftPct.toFixed(1) + "%";
+  els.tunerNeedle.classList.toggle("centered", Math.abs(clampedCents) <= 5);
+  els.tunerRaw.textContent = t("tuner_raw", {
+    sign: parsed.cents >= 0 ? "+" : "",
+    cents: parsed.cents.toFixed(0),
+    counter: parsed.counter,
+  });
 }
 
 // ---- Scan ----
@@ -115,6 +152,7 @@ async function connectToDevice(device){
     notifyChar.addEventListener("characteristicvaluechanged", (ev) => {
       const raw = new Uint8Array(ev.target.value.buffer);
       log(t("log_rx", { hex: fmtHex(raw) }), "l-rx");
+      updateTunerDisplay(raw);
     });
 
     log(t("log_connected", { name: device.name }), "l-info");
@@ -169,6 +207,44 @@ els.patchButtons.forEach(btn => {
       log(t("log_send_patch_failed", { n, name: e.name, message: e.message }), "l-err");
     }
   });
+});
+
+// ---- Tuner ON/OFF ----
+els.btnTunerOn.addEventListener("click", async () => {
+  if (!writeChar){
+    log(t("log_not_connected"), "l-err");
+    return;
+  }
+  try{
+    const payload = buildTunerStartPayload();
+    if (writeChar.properties.writeWithoutResponse){
+      await writeChar.writeValueWithoutResponse(payload);
+    } else {
+      await writeChar.writeValue(payload);
+    }
+    log(t("log_tx_tuner_on", { hex: fmtHex(payload) }), "l-tx");
+  } catch(e){
+    log(t("log_tuner_on_failed", { name: e.name, message: e.message }), "l-err");
+  }
+});
+
+els.btnTunerOff.addEventListener("click", async () => {
+  if (!writeChar){
+    log(t("log_not_connected"), "l-err");
+    return;
+  }
+  try{
+    const payload = buildTunerStopPayload();
+    if (writeChar.properties.writeWithoutResponse){
+      await writeChar.writeValueWithoutResponse(payload);
+    } else {
+      await writeChar.writeValue(payload);
+    }
+    log(t("log_tx_tuner_off", { hex: fmtHex(payload) }), "l-tx");
+    resetTunerDisplay();
+  } catch(e){
+    log(t("log_tuner_off_failed", { name: e.name, message: e.message }), "l-err");
+  }
 });
 
 setConnectedUi(false);

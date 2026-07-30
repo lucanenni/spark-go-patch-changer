@@ -12,7 +12,14 @@ import threading
 from bleak import BleakClient, BleakScanner
 
 import i18n
-from protocol import DEFAULT_SEQ, NOTIFY_HANDLE, WRITE_HANDLE, build_patch_payload
+from protocol import (
+    DEFAULT_SEQ,
+    NOTIFY_HANDLE,
+    WRITE_HANDLE,
+    build_patch_payload,
+    build_tuner_start_payload,
+    build_tuner_stop_payload,
+)
 
 
 class BleBackend:
@@ -84,6 +91,22 @@ class BleBackend:
         if not self.client or not self.client.is_connected:
             raise RuntimeError(i18n.t("error_not_connected"))
         payload = build_patch_payload(patch_number, self.seq)
+        self.seq = (self.seq + 1) & 0xFF
+        await self.client.write_gatt_char(WRITE_HANDLE, payload, response=False)
+        self.emit("tx", payload)
+
+    async def tuner_start(self):
+        if not self.client or not self.client.is_connected:
+            raise RuntimeError(i18n.t("error_not_connected"))
+        payload = build_tuner_start_payload(self.seq)
+        self.seq = (self.seq + 1) & 0xFF
+        await self.client.write_gatt_char(WRITE_HANDLE, payload, response=False)
+        self.emit("tx", payload)
+
+    async def tuner_stop(self):
+        if not self.client or not self.client.is_connected:
+            raise RuntimeError(i18n.t("error_not_connected"))
+        payload = build_tuner_stop_payload(self.seq)
         self.seq = (self.seq + 1) & 0xFF
         await self.client.write_gatt_char(WRITE_HANDLE, payload, response=False)
         self.emit("tx", payload)
