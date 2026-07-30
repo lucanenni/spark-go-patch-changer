@@ -135,3 +135,4 @@ The 0-cents center consistently sits at **counter ≈ 8064** (matching the idle 
   - `web/js/protocol.js` — GATT UUIDs, `buildPatchPayload`, `buildTunerStartPayload`/`buildTunerStopPayload`, `parseTunerFrame`, `fmtHex`.
   - `web/js/i18n.js` — key-based translations (`en`/`it`), `navigator.language` auto-detection, `t()` + `applyStaticTranslations()`.
   - `web/js/app.js` — UI wiring and BLE glue, including the tuner gauge; loaded last, after `i18n.js` and `protocol.js`.
+- **ESP32-S3 firmware** (`ESP32-S3-ChocolatePlus-bridge/`, PlatformIO/Arduino, NimBLE + Adafruit TinyUSB), a USB-MIDI-to-BLE bridge rather than a standalone client: plugs into an MVave Chocolate Plus's USB HOST port and translates the pedal's Program Change/Control Change messages into patch switches, effect toggles, and tuner start/stop against the Spark GO, with a small on-device status/tuner display. No i18n (fixed English strings). See its own README for the MIDI mapping and hardware notes.

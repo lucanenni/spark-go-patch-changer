@@ -6,3 +6,5 @@ __pycache__/
 *.pyc
 .DS_Store
 **/.DS_Store
+ESP32-S3-ChocolatePlus-bridge/.pio/
+ESP32-S3-ChocolatePlus-bridge/vendor_sdk/
