@@ -104,6 +104,12 @@ adjusting - ST7735 panels come in several offset variants.
 
 ## Building / flashing
 
+Don't want to set up PlatformIO? **[Flash it straight from a browser](https://lucanenni.github.io/spark-go-utils/)**
+instead (Chrome/Edge/Opera on a computer, no software install) - built with
+[ESP Web Tools](https://esphome.github.io/esp-web-tools/) against pre-built
+binaries in `../docs/firmware/`. No support provided for this route either,
+same as everything else here.
+
 ```bash
 cd ESP32-S3-ChocolatePlus-bridge
 pio run --target upload
