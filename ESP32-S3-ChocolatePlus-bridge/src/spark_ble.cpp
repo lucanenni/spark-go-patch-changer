@@ -357,6 +357,15 @@ bool requestActivePatch() {
   return writeRaw(spark_protocol::buildActivePatchRequestPayload(g_seq.consume()));
 }
 
+bool setGuitarVolume(float value) {
+  return writeRaw(spark_protocol::buildMixerPayload(spark_protocol::kMixerChannelGuitar, value,
+                                                      g_seq.consume()));
+}
+
+bool tapTempo(float bpm) {
+  return writeRaw(spark_protocol::buildTapTempoPayload(bpm, g_seq.consume()));
+}
+
 void forceReconnect() { g_forceReconnectRequested = true; }
 
 void onConnectionStateChanged(ConnectionStateCallback cb) { g_onConnectionState = std::move(cb); }

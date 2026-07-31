@@ -4,6 +4,9 @@
 #include <MIDI.h>
 #include <USB.h>
 
+#include <algorithm>
+#include <vector>
+
 #include "config.h"
 #include "spark_ble.h"
 #include "spark_protocol.h"
@@ -18,6 +21,34 @@ Adafruit_USBD_MIDI usb_midi;
 MIDI_CREATE_INSTANCE(Adafruit_USBD_MIDI, usb_midi, MIDI);
 
 String g_lastEvent = "Waiting for MIDI...";
+
+// Tap-tempo state: timestamps (millis()) of the last few taps, mirrors
+// desktop/spark_go_gui.py's tap_tempo() logic exactly (reset gap, sample
+// count, min/max BPM clamp).
+std::vector<uint32_t> g_tapTimes;
+
+// Computes a fresh BPM from tap intervals and sends it. Returns false (no
+// send) on the first tap of a new sequence, same as the reference client.
+bool handleTapTempo() {
+  uint32_t now = millis();
+  if (!g_tapTimes.empty() && now - g_tapTimes.back() > config::kTapTempoResetGapMs) {
+    g_tapTimes.clear();
+  }
+  g_tapTimes.push_back(now);
+  if (g_tapTimes.size() > config::kTapTempoMaxSamples) {
+    g_tapTimes.erase(g_tapTimes.begin());
+  }
+  if (g_tapTimes.size() < 2) return false;
+
+  uint32_t totalIntervalMs = g_tapTimes.back() - g_tapTimes.front();
+  float avgIntervalS = (totalIntervalMs / 1000.0f) / (g_tapTimes.size() - 1);
+  float bpm = 60.0f / avgIntervalS;
+  bpm = std::min(config::kTapTempoMaxBpm, std::max(config::kTapTempoMinBpm, bpm));
+
+  bool ok = spark_ble::tapTempo(bpm);
+  g_lastEvent = String("Tap Tempo ") + String(bpm, 1) + " BPM" + (ok ? "" : " (not connected)");
+  return true;
+}
 
 bool channelMatches(uint8_t channel) {
   return config::kMidiChannel == 0 || channel == config::kMidiChannel;
@@ -72,11 +103,22 @@ void handleControlChange(uint8_t channel, uint8_t number, uint8_t value) {
     return;
   }
 
-  if (number == config::kTapTempoCc || number == config::kMasterVolumeCc ||
-      number == config::kChannelVolumeCc) {
-    // No known Spark GO command for these anywhere in this repo's protocol
-    // notes - see README/plan. Logged rather than guessed at.
-    g_lastEvent = String("CC") + number + " unsupported";
+  if (number == config::kTapTempoCc) {
+    handleTapTempo();
+    return;
+  }
+
+  if (number == config::kChannelVolumeCc) {
+    float normalized = value / 127.0f;
+    bool ok = spark_ble::setGuitarVolume(normalized);
+    g_lastEvent = String("Guitar Volume ") + static_cast<int>(normalized * 100) + "%" +
+                  (ok ? "" : " (not connected)");
+    return;
+  }
+
+  if (number == config::kMasterVolumeCc) {
+    // Deliberately unimplemented - see config::kMasterVolumeCc's comment.
+    g_lastEvent = "CC20 Master Volume (not supported)";
     return;
   }
 

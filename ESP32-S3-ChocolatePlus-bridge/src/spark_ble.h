@@ -64,6 +64,13 @@ bool toggleEffect(const String& internalName, bool on);
 bool requestPreset(uint8_t presetNum0Based);
 bool requestActivePatch();
 
+// value is 0.0-1.0. Only the Guitar channel (spark_protocol::kMixerChannelGuitar)
+// is confirmed to do anything on real hardware - see PROTOCOL.md's "Mixer" section.
+bool setGuitarVolume(float value);
+// bpm is a plain beats-per-minute float, computed by the caller from tap
+// intervals - this function just sends it, no timing logic of its own.
+bool tapTempo(float bpm);
+
 // Ask the state machine to drop the current connection and reconnect from
 // scratch (used by the BOOT-button "force reconnect" trigger).
 void forceReconnect();

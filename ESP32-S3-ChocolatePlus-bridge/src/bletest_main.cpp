@@ -16,15 +16,48 @@
 //   patch 1        - send patch change (1-4)
 //   active         - query which patch is active
 //   tuner on/off   - start/stop the tuner
+//   volume 0-127   - set Guitar Volume (mapped to the protocol's 0.0-1.0 float)
+//   tap            - tap tempo (call repeatedly at the desired tempo; BPM is
+//                    computed locally from the interval between calls, same
+//                    logic as midi_bridge's CC8 handler)
 //   status         - print connection/rx/sub/cccd diagnostics
 
 #include <Arduino.h>
 
+#include <algorithm>
+#include <vector>
+
+#include "config.h"
 #include "spark_ble.h"
 #include "spark_protocol.h"
 #include "spark_state.h"
 
 namespace {
+
+// Mirrors midi_bridge.cpp's handleTapTempo() exactly, duplicated here since
+// this is a standalone test build with no dependency on midi_bridge.
+std::vector<uint32_t> g_tapTimes;
+
+void handleTap() {
+  uint32_t now = millis();
+  if (!g_tapTimes.empty() && now - g_tapTimes.back() > config::kTapTempoResetGapMs) {
+    g_tapTimes.clear();
+  }
+  g_tapTimes.push_back(now);
+  if (g_tapTimes.size() > config::kTapTempoMaxSamples) {
+    g_tapTimes.erase(g_tapTimes.begin());
+  }
+  if (g_tapTimes.size() < 2) {
+    Serial.println("[cmd] tap (waiting for another tap)");
+    return;
+  }
+  uint32_t totalIntervalMs = g_tapTimes.back() - g_tapTimes.front();
+  float avgIntervalS = (totalIntervalMs / 1000.0f) / (g_tapTimes.size() - 1);
+  float bpm = 60.0f / avgIntervalS;
+  bpm = std::min(config::kTapTempoMaxBpm, std::max(config::kTapTempoMinBpm, bpm));
+  Serial.printf("[cmd] tapTempo(%.1f)\n", bpm);
+  spark_ble::tapTempo(bpm);
+}
 
 const char* connectionStateText(spark_ble::ConnectionState state) {
   switch (state) {
@@ -63,8 +96,16 @@ void handleLine(const String& line) {
     int n = line.substring(6).toInt();
     Serial.printf("[cmd] sendPatch(%d)\n", n);
     spark_ble::sendPatch(static_cast<uint8_t>(n));
+  } else if (line.startsWith("volume ")) {
+    int v = line.substring(7).toInt();
+    float normalized = static_cast<float>(v) / 127.0f;
+    Serial.printf("[cmd] setGuitarVolume(%.2f)\n", normalized);
+    spark_ble::setGuitarVolume(normalized);
+  } else if (line == "tap") {
+    handleTap();
   } else if (line.length() > 0) {
-    Serial.println("[cmd] unknown - try: status, active, tuner on, tuner off, patch <1-4>");
+    Serial.println(
+        "[cmd] unknown - try: status, active, tuner on, tuner off, patch <1-4>, volume <0-127>, tap");
   }
 }
 

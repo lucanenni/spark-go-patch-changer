@@ -69,6 +69,18 @@ bool readFloat(const Bytes& data, size_t& pos, float& out) {
   return true;
 }
 
+// Mirrors _build_float: one 0xCA prefix byte + 4 big-endian IEEE754 bytes.
+void appendFloat(Bytes& out, float value) {
+  uint32_t bits;
+  static_assert(sizeof(float) == sizeof(uint32_t), "expects 32-bit float");
+  memcpy(&bits, &value, sizeof(bits));
+  out.push_back(0xCA);
+  out.push_back(static_cast<uint8_t>(bits >> 24));
+  out.push_back(static_cast<uint8_t>(bits >> 16));
+  out.push_back(static_cast<uint8_t>(bits >> 8));
+  out.push_back(static_cast<uint8_t>(bits));
+}
+
 }  // namespace
 
 Bytes buildPatchPayload(uint8_t patchNumber, uint8_t seq) {
@@ -160,6 +172,35 @@ Bytes buildPresetRequestPayload(uint8_t presetNum, uint8_t seq) {
 Bytes buildActivePatchRequestPayload(uint8_t seq) {
   Bytes inner = {0xF0, 0x01, seq, 0x00, 0x02, 0x10};
   inner.insert(inner.end(), 37, 0x00);
+  inner.push_back(0xF7);
+  return withHeader(std::move(inner));
+}
+
+Bytes buildMixerPayload(uint8_t channel, float value, uint8_t seq) {
+  Bytes data8;
+  data8.push_back(channel);
+  appendFloat(data8, value);
+
+  Bytes data7 = pack7Bit(data8);
+  uint8_t checksum = xorAll(data7);
+
+  Bytes inner = {0xF0, 0x01, seq, checksum, 0x01, 0x33};
+  inner.insert(inner.end(), data7.begin(), data7.end());
+  inner.push_back(0xF7);
+  return withHeader(std::move(inner));
+}
+
+Bytes buildTapTempoPayload(float bpm, uint8_t seq) {
+  Bytes data8;
+  appendFloat(data8, bpm);
+  data8.push_back(0x3F);
+  data8.push_back(0x3F);
+
+  Bytes data7 = pack7Bit(data8);
+  uint8_t checksum = xorAll(data7);
+
+  Bytes inner = {0xF0, 0x01, seq, checksum, 0x01, 0x62};
+  inner.insert(inner.end(), data7.begin(), data7.end());
   inner.push_back(0xF7);
   return withHeader(std::move(inner));
 }

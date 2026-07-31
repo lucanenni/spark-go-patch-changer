@@ -35,13 +35,30 @@ inline constexpr uint8_t kEffectToggleCcCount = 7;
 // tuner view.
 inline constexpr uint8_t kTunerToggleCc = 7;
 
-// Not yet reverse-engineered anywhere in this repo's protocol notes - no
-// known Spark GO BLE command exists for these. Logged as "unsupported" when
-// received rather than guessing at a wire format. See the plan / README for
-// what it'd take to add them (a fresh BLE capture of the official app).
+// Control Change 8 taps tempo. There's no protocol-level start/stop concept -
+// each tap computes a fresh BPM locally (from up to the last
+// kTapTempoMaxSamples intervals, reset if the gap since the previous tap
+// exceeds kTapTempoResetGapMs) and sends it immediately. Confirmed working on
+// real Spark GO hardware; matches desktop/spark_go_gui.py's tap_tempo().
 inline constexpr uint8_t kTapTempoCc = 8;
-inline constexpr uint8_t kMasterVolumeCc = 20;
+inline constexpr uint32_t kTapTempoResetGapMs = 2000;
+inline constexpr uint8_t kTapTempoMaxSamples = 4;
+inline constexpr float kTapTempoMinBpm = 30.0f;
+inline constexpr float kTapTempoMaxBpm = 300.0f;
+
+// Control Change 21 sets Guitar Volume (mixer channel
+// spark_protocol::kMixerChannelGuitar), confirmed working on real Spark GO
+// hardware - value/127 maps MIDI's 0-127 to the protocol's 0.0-1.0 float.
 inline constexpr uint8_t kChannelVolumeCc = 21;
+
+// Control Change 20 (Master Volume) is deliberately NOT implemented: there is
+// no Spark GO BLE command for it. The amp's physical Music Volume buttons are
+// plain Bluetooth AVRCP commands sent to the paired phone, a mechanism
+// entirely separate from this GATT service - confirmed by watching the
+// phone's own volume change when pressing them. Received but logged as
+// unsupported rather than silently ignored, so it's visible on-screen if a
+// pedal is mapped to it by mistake.
+inline constexpr uint8_t kMasterVolumeCc = 20;
 
 // --- Display SPI pins ---
 // Community-reported for this exact AliExpress/GNPE clone of the LilyGO

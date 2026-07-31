@@ -5,8 +5,12 @@
 // Python reference (see PROTOCOL.md and the plan for the full writeup) - no
 // protocol re-derivation happens here, just a change of language.
 //
-// Not covered (no known command exists anywhere in this repo's
-// reverse-engineering notes): tap tempo, master/channel volume.
+// Also covers the mixer (Guitar Volume) and tap-tempo commands, confirmed on
+// real Spark GO hardware after this firmware's initial build - see
+// PROTOCOL.md's "Mixer" and "Tap tempo" sections. Master Volume has no
+// working command (the amp's physical Music Volume buttons are plain
+// Bluetooth AVRCP to the paired phone, unrelated to this GATT service) and
+// is deliberately left unimplemented.
 
 #include <Arduino.h>
 
@@ -63,6 +67,18 @@ Bytes buildEffectTogglePayload(const String& internalName, bool on, uint8_t seq)
 Bytes buildPresetRequestPayload(uint8_t presetNum, uint8_t seq);
 
 Bytes buildActivePatchRequestPayload(uint8_t seq);
+
+// Mixer channel byte for CMD 0x01/SUB_CMD 0x33. This is the only channel
+// confirmed to do anything on real Spark GO hardware - see PROTOCOL.md.
+inline constexpr uint8_t kMixerChannelGuitar = 0;
+
+// value is 0.0-1.0. No ack/confirmation for this command has been observed,
+// so callers apply it optimistically.
+Bytes buildMixerPayload(uint8_t channel, float value, uint8_t seq);
+
+// bpm is a plain beats-per-minute float. Confirmed on real hardware despite
+// the asymmetric response sub-command (0x63, not 0x62) - see PROTOCOL.md.
+Bytes buildTapTempoPayload(float bpm, uint8_t seq);
 
 // --- 7-bit packing (SysEx-style: every on-wire byte stays under 0x80) ---
 Bytes pack7Bit(const Bytes& data8);

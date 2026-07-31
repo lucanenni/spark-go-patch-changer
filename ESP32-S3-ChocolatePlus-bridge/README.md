@@ -66,13 +66,28 @@ drive a Neural DSP Nano Cortex from it) - so this dongle enumerates as a
   BLE notification straight to Serial without needing the Chocolate Plus at
   all (there's no CDC/TinyUSB conflict when nothing in the build touches
   USB-MIDI).
-- **Tap Tempo (CC8), Master Volume (CC20), and Channel Volume (CC21) are not
-  implemented.** No Spark GO BLE command for any of these has been
-  reverse-engineered anywhere in this repo's history - inventing a wire
-  format without a real capture to check it against isn't safe. Receiving
-  these just logs "unsupported" (see the on-screen last-event line). Adding
-  them needs a fresh BLE capture of the official Positive Grid app doing
-  these actions - a separate reverse-engineering session.
+- **Tap Tempo (CC8) and Guitar/Channel Volume (CC21) are implemented**,
+  ported from the desktop/web clients where both were confirmed against real
+  Spark GO hardware (see the root `PROTOCOL.md`'s "Tap tempo" and "Mixer"
+  sections) - **not yet re-confirmed through this firmware specifically**,
+  same caveat as effect toggling below. Tap Tempo computes a BPM locally from
+  the last few tap intervals (resetting after a >2s gap, same logic as
+  `desktop/spark_go_gui.py`) and sends it fresh on every tap; there's no
+  protocol-level start/stop. Guitar Volume maps the incoming CC value
+  (0-127) linearly to the protocol's 0.0-1.0 float; only that one mixer
+  channel does anything on the Spark GO.
+- **Master Volume (CC20) is deliberately not implemented, and never will be
+  via this command.** The amp's physical Music Volume buttons are plain
+  Bluetooth AVRCP volume commands sent to the paired phone - a mechanism
+  entirely separate from the Spark GO's own BLE service, confirmed by
+  watching the phone's volume change when pressing them. Receiving CC20 just
+  logs "not supported" (see the on-screen last-event line) rather than
+  silently doing nothing.
+- **Effect toggling (CC0-6) has been ported but not yet confirmed against
+  real Spark GO hardware** (unlike patch switching and the tuner, which
+  have). The wire format itself is the same well-tested envelope/packing/
+  checksum used everywhere else in this protocol, so it's expected to work,
+  but hasn't been explicitly exercised with a real toggle command yet.
 - The tuner's cents reading is provisional/uncalibrated (inherited from
   PROTOCOL.md's own notes) - good for a rough on-screen needle, not a
   lab-grade tuner.
@@ -197,9 +212,9 @@ listens for):
 | Toggle Delay | Control Change | 5 |
 | Toggle Reverb | Control Change | 6 |
 | Toggle Tuner | Control Change | 7 |
-| Tap Tempo | Control Change | 8 *(not implemented - see above)* |
-| Master Volume | Control Change | 20 *(not implemented)* |
-| Channel Volume | Control Change | 21 *(not implemented)* |
+| Tap Tempo | Control Change | 8 |
+| Guitar/Channel Volume | Control Change | 21 |
+| Master Volume | Control Change | 20 *(deliberately not implemented - see above)* |
 
 The mapping (channel, CC/PC numbers) lives in `include/config.h` if you want
 to change it.
