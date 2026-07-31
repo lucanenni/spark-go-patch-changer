@@ -46,36 +46,42 @@ drive a Neural DSP Nano Cortex from it) - so this dongle enumerates as a
   false forever. Same reason `usb_midi.setStringDescriptor(...)` has no
   effect on ESP32 - `USB.productName(...)` (called before `USB.begin()`) is
   what actually sets the USB product name here.
-- Confirmed working end-to-end against real hardware: the Chocolate Plus's
-  HOST port recognizes the dongle and sends real PC/CC messages, patch
-  switching and the tuner (start/stop + live note+cents) both work against a
-  real Spark GO. Two more non-obvious BLE fixes it took real hardware to
-  find (see the comment at the top of `spark_ble.cpp` for detail):
+- **Confirmed working end-to-end against real hardware: patch switching,
+  individual effect toggling (CC0-6), the tuner, Guitar Volume (CC21), and
+  tap tempo (CC8) all work against a real Spark GO**, driven by real PC/CC
+  messages from the Chocolate Plus's HOST port. Getting there took several
+  non-obvious BLE fixes (see the comment at the top of `spark_ble.cpp` for
+  detail):
   - `NimBLERemoteCharacteristic::subscribe()`'s CCCD write must be
     write-**with**-response - write-without-response reported success
     (`cccdFound`/`lastSubscribeOk` both true) but the Spark GO never
     actually started sending notifications.
   - A patch-change command is sometimes acked with the generic `CMD 0x04`
     ack (no payload) instead of the richer `CMD 0x03` confirmation
-    PROTOCOL.md documents (which carries the new patch number) - both are
-    now handled, using the locally-remembered requested patch number when
-    the generic ack (no data) arrives instead.
-  Diagnosed using `src/bletest_main.cpp` (see "Isolated diagnostic builds"
-  below) - much faster than
-  guessing from on-screen counters alone, since it can hex-dump every raw
-  BLE notification straight to Serial without needing the Chocolate Plus at
-  all (there's no CDC/TinyUSB conflict when nothing in the build touches
-  USB-MIDI).
-- **Tap Tempo (CC8) and Guitar/Channel Volume (CC21) are implemented**,
-  ported from the desktop/web clients where both were confirmed against real
-  Spark GO hardware (see the root `PROTOCOL.md`'s "Tap tempo" and "Mixer"
-  sections) - **not yet re-confirmed through this firmware specifically**,
-  same caveat as effect toggling below. Tap Tempo computes a BPM locally from
-  the last few tap intervals (resetting after a >2s gap, same logic as
-  `desktop/spark_go_gui.py`) and sends it fresh on every tap; there's no
-  protocol-level start/stop. Guitar Volume maps the incoming CC value
-  (0-127) linearly to the protocol's 0.0-1.0 float; only that one mixer
-  channel does anything on the Spark GO.
+    PROTOCOL.md documents (which carries the new patch number).
+  - **An effect-toggle command gets the same generic-ack treatment** (`CMD
+    0x04/SUB_CMD 0x15`) - on this hardware it was actually the *only* ack
+    ever observed, never the richer `CMD 0x03` confirmation. Without
+    handling this, every toggle recomputed its "new" state from the same
+    stale cached value, so effects appeared permanently stuck (e.g. always
+    reporting "Reverb OFF" no matter how many times it was pressed).
+  - The patch number/name could stay blank indefinitely right after
+    connecting - traced to a `delay()` inside the NimBLE notification
+    callback that risked stalling the BLE host stack at exactly the moment
+    the link was least settled. Replaced with a non-blocking timer polled
+    from `spark_ble::loop()`, and the patch *number* now updates from the
+    simpler active-patch confirmation directly instead of waiting on the
+    slower full pedal-chain read that also carries the name.
+  All of these were found using `src/bletest_main.cpp` (see "Isolated
+  diagnostic builds" below) - much faster than guessing from on-screen
+  counters alone, since it can hex-dump every raw BLE notification straight
+  to Serial without needing the Chocolate Plus at all (there's no
+  CDC/TinyUSB conflict when nothing in the build touches USB-MIDI).
+- Tap Tempo computes a BPM locally from the last few tap intervals
+  (resetting after a >2s gap, same logic as `desktop/spark_go_gui.py`) and
+  sends it fresh on every tap; there's no protocol-level start/stop. Guitar
+  Volume maps the incoming CC value (0-127) linearly to the protocol's
+  0.0-1.0 float; only that one mixer channel does anything on the Spark GO.
 - **Master Volume (CC20) is deliberately not implemented, and never will be
   via this command.** The amp's physical Music Volume buttons are plain
   Bluetooth AVRCP volume commands sent to the paired phone - a mechanism
@@ -83,17 +89,15 @@ drive a Neural DSP Nano Cortex from it) - so this dongle enumerates as a
   watching the phone's volume change when pressing them. Receiving CC20 just
   logs "not supported" (see the on-screen last-event line) rather than
   silently doing nothing.
-- **Effect toggling (CC0-6) has been ported but not yet confirmed against
-  real Spark GO hardware** (unlike patch switching and the tuner, which
-  have). The wire format itself is the same well-tested envelope/packing/
-  checksum used everywhere else in this protocol, so it's expected to work,
-  but hasn't been explicitly exercised with a real toggle command yet.
 - The tuner's cents reading is provisional/uncalibrated (inherited from
   PROTOCOL.md's own notes) - good for a rough on-screen needle, not a
   lab-grade tuner.
-- (Re)connect attempts (BLE scan + connect) block briefly; USB-MIDI input
-  isn't serviced during that window. Only matters at startup and on rare
-  reconnects.
+- (Re)connect attempts (BLE scan + connect) each still block for their own
+  duration; USB-MIDI input isn't serviced during that window. Only matters
+  at startup and on rare reconnects - and the display now shows
+  "Scanning..."/"Connecting..." during it instead of appearing frozen (each
+  phase runs on its own `loop()` iteration so the previous state gets drawn
+  first - see `spark_ble.cpp`'s `loop()`).
 
 ## Hardware notes (unofficial clone - confirm on your unit)
 
@@ -160,14 +164,18 @@ before the main loop.
 Once `setup()` completes, `loop()` takes over and the screen switches to the
 normal status view (BLE connection state, current patch, last MIDI command).
 The connection line reflects "Scanning...", "Connecting...", "Connected", and
-"Disconnected" live as they happen - scan/connect are drawn directly from the
-connection-state callback rather than waiting for `loop()`'s own redraw,
-since the scan+connect attempt itself blocks the main task for its whole
-duration (see the comment on `handleConnectionStateChanged()` in `main.cpp`
-for why only those two states are safe to draw from there). Seeing that view
-at all, even stuck on "Disconnected"/"Scanning...", means startup succeeded
-and the remaining issue is BLE-side (finding/connecting to the Spark GO), not
-a boot hang.
+"Disconnected" live as they happen. Each of scan and connect still blocks for
+its own duration, but `spark_ble.cpp`'s `loop()` splits the attempt into a
+3-phase state machine (`kDisconnected` -> `kScanning` -> `kConnecting` ->
+`kConnected`) across separate iterations, so each state change gets drawn
+from an ordinary top-level `loop()` redraw *before* the next iteration runs
+the actual blocking call - not from inside a BLE callback (an earlier
+attempt at drawing directly from the connection-state callback left the
+connection stuck showing "Scanning..." forever on real hardware, suspected
+interference between the TFT SPI transaction and the BLE stack's own timing
+at that exact point). Seeing the status view at all, even stuck on
+"Disconnected"/"Scanning...", means startup succeeded and the remaining
+issue is BLE-side (finding/connecting to the Spark GO), not a boot hang.
 
 Adding a per-file try/catch isn't meaningful in C++ Arduino code - a hang or
 a hard crash (Guru Meditation Error) look the same from the screen's
@@ -192,10 +200,12 @@ get direct visibility into one part without needing the Chocolate Plus at all:
 - `esp32-s3-dongle-bletest` (`src/bletest_main.cpp`) - BLE only (reuses the
   real `spark_ble`/`spark_protocol`/`spark_state.cpp`), no USB-MIDI/display.
   Has CDC enabled - hex-dumps every raw BLE notification and logs every
-  connection/preset/tuner event straight to Serial, plus takes typed
-  commands (`status`, `active`, `patch <1-4>`, `tuner on`/`off`). This is
-  what found both BLE bugs listed under Status/limitations above - much
-  faster than guessing from on-screen counters on the real firmware.
+  connection/preset/effect-state/tuner event straight to Serial (preset
+  reads log each pedal slot's name + on/off too), plus takes typed commands:
+  `status`, `active`, `patch <1-4>`, `tuner on`/`off`, `volume <0-127>`,
+  `tap`, `toggle <0-6>`. This is what found every BLE quirk listed under
+  Status/limitations above - much faster than guessing from on-screen
+  counters on the real firmware.
 
 Build/flash/monitor any of them the same way:
 ```bash
