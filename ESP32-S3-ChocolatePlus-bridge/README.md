@@ -146,8 +146,10 @@ for debugging without the screen in view.
 
 ## Boot diagnostics
 
-`setup()` in `main.cpp` writes a one-line checkpoint to the screen after each
-init step, in order: `display OK` -> `USB-MIDI OK` -> `tuner OK` ->
+`setup()` in `main.cpp` first shows a one-shot splash (`display::showBootSplash()`,
+product name, held ~1.2s) so there's visible confirmation the board is alive
+before anything else runs, then writes a one-line checkpoint to the screen
+after each init step, in order: `display OK` -> `USB-MIDI OK` -> `tuner OK` ->
 `BLE init OK` -> `setup() done` (each under a `Booting` header). If the
 firmware hangs or crashes partway through `setup()`, whichever line is still
 on screen tells you exactly which step it never got past - e.g. stuck on
@@ -156,10 +158,16 @@ returned; stuck on "BLE init OK" would be odd since that's the last one
 before the main loop.
 
 Once `setup()` completes, `loop()` takes over and the screen switches to the
-normal status view (BLE connection state, current patch, last MIDI command) -
-so seeing that view at all, even stuck on "Disconnected"/"Scanning...", means
-startup succeeded and the remaining issue is BLE-side (finding/connecting to
-the Spark GO), not a boot hang.
+normal status view (BLE connection state, current patch, last MIDI command).
+The connection line reflects "Scanning...", "Connecting...", "Connected", and
+"Disconnected" live as they happen - scan/connect are drawn directly from the
+connection-state callback rather than waiting for `loop()`'s own redraw,
+since the scan+connect attempt itself blocks the main task for its whole
+duration (see the comment on `handleConnectionStateChanged()` in `main.cpp`
+for why only those two states are safe to draw from there). Seeing that view
+at all, even stuck on "Disconnected"/"Scanning...", means startup succeeded
+and the remaining issue is BLE-side (finding/connecting to the Spark GO), not
+a boot hang.
 
 Adding a per-file try/catch isn't meaningful in C++ Arduino code - a hang or
 a hard crash (Guru Meditation Error) look the same from the screen's

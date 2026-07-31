@@ -17,6 +17,11 @@ namespace display {
 
 void begin();
 
+// One-shot startup splash (product name), shown once right after begin()
+// before the boot checkpoint sequence starts. Caller decides how long to
+// hold it - this just draws it once.
+void showBootSplash();
+
 // Pre-connection (or connection-lost) diagnostic view: connection state,
 // rx/subscribe/CCCD counters, whatever midi_bridge last did. Safe to call on
 // every change - it's a tiny display.

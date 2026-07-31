@@ -55,6 +55,13 @@ void printWrapped(const String& text, int16_t x, int16_t y, int16_t lineHeight,
   }
 }
 
+// Draws text at the current text size/color, horizontally centered.
+void printCentered(const String& text, int16_t y) {
+  int16_t w = tft.textWidth(text);
+  tft.setCursor((tft.width() - w) / 2, y);
+  tft.print(text);
+}
+
 }  // namespace
 
 void begin() {
@@ -66,6 +73,22 @@ void begin() {
   tft.setRotation(config::kDisplayRotation);
   tft.fillScreen(kBg);
   tft.setTextColor(kFg, kBg);
+}
+
+void showBootSplash() {
+  tft.fillScreen(kBg);
+
+  tft.setTextSize(2);
+  tft.setTextColor(kAccent, kBg);
+  printCentered("SPARK", 30);
+  printCentered("GO", 55);
+
+  tft.setTextSize(1);
+  tft.setTextColor(kFg, kBg);
+  printCentered("Bridge", 92);
+
+  tft.setTextColor(TFT_DARKGREY, kBg);
+  printCentered("MVave -> Spark GO", 115);
 }
 
 void showStatus(const String& connectionLine, int currentPatch1Based, const String& lastEventLine) {
