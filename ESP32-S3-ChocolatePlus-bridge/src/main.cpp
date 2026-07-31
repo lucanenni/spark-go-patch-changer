@@ -57,6 +57,14 @@ void renderStatusView() {
 void handleConnectionStateChanged(spark_ble::ConnectionState state) {
   Serial.print("[BLE] ");
   Serial.println(connectionStateText(state));
+
+  // Drop the cached patch/effect state on disconnect rather than letting it
+  // silently survive until the next connection's preset read overwrites it -
+  // otherwise a stale patch number/name could briefly show as current right
+  // after reconnecting, before that fresh read completes.
+  if (state == spark_ble::ConnectionState::kDisconnected) {
+    spark_state::reset();
+  }
 }
 
 }  // namespace
