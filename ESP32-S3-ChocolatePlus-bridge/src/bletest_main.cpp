@@ -20,6 +20,11 @@
 //   tap            - tap tempo (call repeatedly at the desired tempo; BPM is
 //                    computed locally from the interval between calls, same
 //                    logic as midi_bridge's CC8 handler)
+//   toggle 0-6     - toggle one pedal-chain slot (0=Gate..6=Reverb), mirroring
+//                    midi_bridge.cpp's handleControlChange exactly (reads the
+//                    cached on/off state, flips it, sends the toggle) but
+//                    with verbose before/after logging - added to diagnose a
+//                    reported "effect toggle state doesn't change" bug
 //   status         - print connection/rx/sub/cccd diagnostics
 
 #include <Arduino.h>
@@ -73,6 +78,29 @@ const char* connectionStateText(spark_ble::ConnectionState state) {
   return "?";
 }
 
+// Mirrors midi_bridge.cpp's handleControlChange effect-toggle branch
+// exactly, with added before/after logging - see the comment at the top of
+// this file for why.
+void handleToggle(uint8_t slot) {
+  if (slot >= spark_protocol::kSlotCount) {
+    Serial.printf("[cmd] toggle %u - out of range (0-6)\n", slot);
+    return;
+  }
+  String internalName;
+  bool currentlyOn;
+  if (!spark_state::getSlot(slot, internalName, currentlyOn)) {
+    Serial.printf("[cmd] toggle %u (%s) - state unknown (no preset read yet?)\n", slot,
+                  spark_protocol::kSlotLabels[slot]);
+    return;
+  }
+  bool newOn = !currentlyOn;
+  Serial.printf("[cmd] toggle %u (%s) name=%s cached_on=%s -> sending %s\n", slot,
+                spark_protocol::kSlotLabels[slot], internalName.c_str(),
+                currentlyOn ? "true" : "false", newOn ? "ON" : "OFF");
+  bool ok = spark_ble::toggleEffect(internalName, newOn);
+  Serial.printf("[cmd] toggleEffect() write %s\n", ok ? "OK" : "FAILED (not connected?)");
+}
+
 void printStatus() {
   Serial.printf("[status] state=%s rx=%u sub=%s cccd=%s activePatch0=%d\n",
                 connectionStateText(spark_ble::state()), (unsigned)spark_ble::rawNotificationCount(),
@@ -103,9 +131,13 @@ void handleLine(const String& line) {
     spark_ble::setGuitarVolume(normalized);
   } else if (line == "tap") {
     handleTap();
+  } else if (line.startsWith("toggle ")) {
+    int slot = line.substring(7).toInt();
+    handleToggle(static_cast<uint8_t>(slot));
   } else if (line.length() > 0) {
     Serial.println(
-        "[cmd] unknown - try: status, active, tuner on, tuner off, patch <1-4>, volume <0-127>, tap");
+        "[cmd] unknown - try: status, active, tuner on, tuner off, patch <1-4>, volume <0-127>, "
+        "tap, toggle <0-6>");
   }
 }
 
@@ -124,6 +156,15 @@ void setup() {
     spark_state::applyPreset(preset);
     Serial.printf("[event] preset read: num=%u name=%s bpm=%.1f pedals=%u\n", preset.presetNum,
                   preset.name.c_str(), preset.bpm, preset.pedalCount);
+    // Logged in full (not just the summary line above) so a preset re-read
+    // that overwrites live-toggled slot state is visible in the log,
+    // including ones the user didn't explicitly trigger (e.g. via a patch
+    // confirmation firing unexpectedly) - added to diagnose a reported
+    // "effect toggle state doesn't change" bug.
+    for (uint8_t i = 0; i < preset.pedalCount; ++i) {
+      Serial.printf("  [event]   slot %u: %s = %s\n", i, preset.pedals[i].name.c_str(),
+                    preset.pedals[i].on ? "ON" : "OFF");
+    }
   });
   spark_ble::onEffectState([](const spark_protocol::EffectStateEvent& e) {
     spark_state::applyEffectState(e);
