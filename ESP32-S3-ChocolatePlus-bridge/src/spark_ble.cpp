@@ -1,8 +1,8 @@
 // Written against NimBLE-Arduino ~1.4.x's API (pinned in platformio.ini).
 // Confirmed working end-to-end on real hardware against a Spark GO: connect,
 // patch change + confirmation + resulting preset read (multi-chunk
-// reassembly), active-patch query, tuner start/stop + data frames. Two
-// non-obvious things it took real-hardware testing to find, see the two
+// reassembly), active-patch query, tuner start/stop + data frames, effect
+// toggle. Non-obvious things it took real-hardware testing to find, see the
 // comments below where they're handled:
 // - subscribe()'s CCCD write must be write-WITH-response (the `response`
 //   param) - write-without-response reported success but the Spark GO never
@@ -12,6 +12,13 @@
 //   ack (no payload) instead of the richer CMD 0x03 confirmation
 //   PROTOCOL.md documents (which carries the new patch number) - handle
 //   both, since which one arrives isn't consistent.
+// - an effect-toggle command gets the *same* generic-ack treatment (CMD
+//   0x04/SUB_CMD 0x15, no payload) instead of the richer CMD 0x03
+//   confirmation - on real hardware this was actually the *only* ack ever
+//   observed for effect toggles (never the rich one), so this isn't a rare
+//   edge case here, it's the norm. Handled the same way as the patch-change
+//   case: remember what we ourselves just asked for (toggleEffect()) and
+//   apply that instead of waiting for a payload that isn't coming.
 
 #include "spark_ble.h"
 
@@ -47,6 +54,14 @@ bool g_cccdFound = false;
 // confirmation PROTOCOL.md documents (which does carry the new patch number
 // itself). -1 if no patch change is currently outstanding.
 int g_pendingPatchNumber0Based = -1;
+// Same idea, for the effect-toggle command: a generic CMD 0x04/SUB_CMD 0x15
+// ack (no payload) is at least as common as the richer CMD 0x03 confirmation
+// - confirmed on real hardware (a bletest_main.cpp toggle test only ever
+// produced the generic ack, never the rich one, leaving the cache frozen at
+// its pre-toggle value forever since nothing handled that case before).
+// Empty name = no toggle currently outstanding.
+String g_pendingEffectName;
+bool g_pendingEffectOn = false;
 bool g_forceReconnectRequested = false;
 
 ConnectionStateCallback g_onConnectionState;
@@ -155,7 +170,20 @@ void processChunk(const spark_protocol::Bytes& chunk) {
       g_pendingPatchNumber0Based = -1;
       handleActivePatchKnown(patch0Based);
     }
+  } else if (cmd == 0x04 && subCmd == 0x15) {
+    // Generic ack for an effect-toggle command - no payload, so the
+    // name/on-off aren't in this message. Use what we ourselves just asked
+    // for (see toggleEffect()) instead of the device's echo, exactly like
+    // the CMD 0x04/SUB_CMD 0x38 patch-change case above.
+    if (g_pendingEffectName.length() > 0 && g_onEffectState) {
+      spark_protocol::EffectStateEvent event;
+      event.name = g_pendingEffectName;
+      event.on = g_pendingEffectOn;
+      g_pendingEffectName = "";
+      g_onEffectState(event);
+    }
   } else if (cmd == 0x03 && subCmd == 0x15 && data8.size() >= 2) {
+    g_pendingEffectName = "";
     spark_protocol::EffectStateEvent event;
     if (spark_protocol::parseEffectStateEvent(data8, event) && g_onEffectState) {
       g_onEffectState(event);
@@ -385,7 +413,12 @@ bool tunerStop() {
 }
 
 bool toggleEffect(const String& internalName, bool on) {
-  return writeRaw(spark_protocol::buildEffectTogglePayload(internalName, on, g_seq.consume()));
+  bool ok = writeRaw(spark_protocol::buildEffectTogglePayload(internalName, on, g_seq.consume()));
+  if (ok) {
+    g_pendingEffectName = internalName;
+    g_pendingEffectOn = on;
+  }
+  return ok;
 }
 
 bool requestPreset(uint8_t presetNum0Based) {
