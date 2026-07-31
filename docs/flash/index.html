@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ESP32-S3 ChocolatePlus Bridge — Flash tool</title>
+<script type="module" src="https://unpkg.com/esp-web-tools@10.1.0/dist/web/install-button.js?module"></script>
+<style>
+  :root { color-scheme: light dark; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    max-width: 640px;
+    margin: 2rem auto;
+    padding: 0 1rem;
+    line-height: 1.5;
+  }
+  h1 { font-size: 1.4rem; }
+  .warning, .steps {
+    border: 1px solid #8884;
+    border-radius: 8px;
+    padding: 1rem;
+    margin: 1rem 0;
+  }
+  .warning { background: color-mix(in srgb, orange 12%, transparent); }
+  code { background: #8882; padding: 0.1em 0.35em; border-radius: 4px; }
+  esp-web-install-button { display: block; margin: 1.5rem 0; }
+  footer { font-size: 0.85rem; opacity: 0.7; margin-top: 2rem; }
+</style>
+</head>
+<body>
+
+<h1>ESP32-S3 ChocolatePlus Bridge — Flash tool</h1>
+
+<p>
+  Flashes the firmware that turns a cheap ESP32-S3 "pocket dongle" into a
+  USB-MIDI ↔ BLE bridge between an <strong>MVave Chocolate Plus</strong> MIDI
+  pedal and a <strong>Positive Grid Spark GO</strong> amp. Straight from this
+  page, no software to install. See the
+  <a href="https://github.com/lucanenni/spark-go-utils/tree/main/ESP32-S3-ChocolatePlus-bridge">
+  project README</a> for what the dongle actually does, the MIDI mapping, and
+  hardware details.
+</p>
+
+<div class="warning">
+  <strong>No support provided.</strong> This is a personal/community project,
+  shared as-is. If something doesn't work, the
+  <a href="https://github.com/lucanenni/spark-go-utils/tree/main/ESP32-S3-ChocolatePlus-bridge">README</a>
+  and <a href="https://github.com/lucanenni/spark-go-utils/blob/main/PROTOCOL.md">PROTOCOL.md</a>
+  have the technical details, but there's no guarantee of help beyond that.
+  Flash at your own risk.
+</div>
+
+<div class="warning">
+  <strong>Only works in Chrome, Edge, or Opera on a computer</strong>
+  (Windows, macOS, Linux, or ChromeOS) - it needs the Web Serial API, which
+  Firefox, Safari, and mobile browsers don't support.
+</div>
+
+<div class="steps">
+  <strong>Before you click Connect:</strong>
+  <ol>
+    <li>Plug the dongle into your computer's USB port.</li>
+    <li>
+      This specific board has no separate reset circuit, so you need to put
+      it into flashing mode by hand: <strong>hold down the BOOT button on
+      the dongle</strong> while you do step 1 (or unplug/replug it while
+      holding BOOT), then keep holding it for a couple of seconds after
+      it's plugged in before releasing.
+    </li>
+    <li>Click "Connect" below and pick the dongle's port when the browser asks.</li>
+  </ol>
+  If the browser doesn't show a port to pick, redo the BOOT-button step and try again.
+</div>
+
+<esp-web-install-button manifest="manifest.json">
+  <button slot="activate">Connect and flash</button>
+  <span slot="unsupported">
+    Your browser doesn't support Web Serial - open this page in Chrome or
+    Edge on a computer instead.
+  </span>
+  <span slot="not-allowed">
+    This page needs to be served over HTTPS to flash a device - if you're
+    seeing this on the real site, something's wrong; please report it.
+  </span>
+</esp-web-install-button>
+
+<p>
+  After flashing, the dongle needs to be plugged into the Chocolate Plus's
+  USB <strong>HOST</strong> port (not a regular computer) to actually work as
+  a bridge, and the pedal's footswitches need to be programmed via MVave's
+  CubeSuite app - see the README linked above for the exact MIDI mapping.
+</p>
+
+<footer>
+  Firmware version 1.0.0 ·
+  <a href="https://github.com/lucanenni/spark-go-utils">spark-go-utils on GitHub</a> ·
+  built with <a href="https://esphome.github.io/esp-web-tools/">ESP Web Tools</a>
+</footer>
+
+</body>
+</html>

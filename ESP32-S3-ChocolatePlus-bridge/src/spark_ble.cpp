@@ -1,0 +1,452 @@
+// Written against NimBLE-Arduino ~1.4.x's API (pinned in platformio.ini).
+// Confirmed working end-to-end on real hardware against a Spark GO: connect,
+// patch change + confirmation + resulting preset read (multi-chunk
+// reassembly), active-patch query, tuner start/stop + data frames, effect
+// toggle. Non-obvious things it took real-hardware testing to find, see the
+// comments below where they're handled:
+// - subscribe()'s CCCD write must be write-WITH-response (the `response`
+//   param) - write-without-response reported success but the Spark GO never
+//   actually started sending notifications (rawNotificationCount() stuck at
+//   0 forever despite cccdFound()/lastSubscribeOk() both true).
+// - a patch-change command is sometimes acked with the generic CMD 0x04
+//   ack (no payload) instead of the richer CMD 0x03 confirmation
+//   PROTOCOL.md documents (which carries the new patch number) - handle
+//   both, since which one arrives isn't consistent.
+// - an effect-toggle command gets the *same* generic-ack treatment (CMD
+//   0x04/SUB_CMD 0x15, no payload) instead of the richer CMD 0x03
+//   confirmation - on real hardware this was actually the *only* ack ever
+//   observed for effect toggles (never the rich one), so this isn't a rare
+//   edge case here, it's the norm. Handled the same way as the patch-change
+//   case: remember what we ourselves just asked for (toggleEffect()) and
+//   apply that instead of waiting for a payload that isn't coming.
+
+#include "spark_ble.h"
+
+#include <NimBLEDevice.h>
+
+#include <algorithm>
+#include <cstddef>
+#include <vector>
+
+#include "config.h"
+
+namespace spark_ble {
+
+namespace {
+
+const NimBLEUUID kServiceUuid("0000ffc0-0000-1000-8000-00805f9b34fb");
+const NimBLEUUID kWriteCharUuid("0000ffc1-0000-1000-8000-00805f9b34fb");
+const NimBLEUUID kNotifyCharUuid("0000ffc2-0000-1000-8000-00805f9b34fb");
+
+ConnectionState g_state = ConnectionState::kDisconnected;
+NimBLEClient* g_client = nullptr;
+NimBLERemoteCharacteristic* g_writeChar = nullptr;
+spark_protocol::SeqCounter g_seq;
+
+uint32_t g_lastAttemptMs = 0;
+uint32_t g_rawNotificationCount = 0;
+bool g_lastSubscribeOk = false;
+bool g_cccdFound = false;
+// The patch number (0-based) most recently requested via sendPatch(), so a
+// *generic* ack (CMD 0x04/SUB_CMD 0x38, no payload) can still be resolved to
+// "which patch is now active" - confirmed on real hardware that the Spark GO
+// sometimes acks a patch change this way instead of the richer CMD 0x03
+// confirmation PROTOCOL.md documents (which does carry the new patch number
+// itself). -1 if no patch change is currently outstanding.
+int g_pendingPatchNumber0Based = -1;
+// Same idea, for the effect-toggle command: a generic CMD 0x04/SUB_CMD 0x15
+// ack (no payload) is at least as common as the richer CMD 0x03 confirmation
+// - confirmed on real hardware (a bletest_main.cpp toggle test only ever
+// produced the generic ack, never the rich one, leaving the cache frozen at
+// its pre-toggle value forever since nothing handled that case before).
+// Empty name = no toggle currently outstanding.
+String g_pendingEffectName;
+bool g_pendingEffectOn = false;
+bool g_forceReconnectRequested = false;
+
+ConnectionStateCallback g_onConnectionState;
+PatchConfirmedCallback g_onPatchConfirmed;
+PresetCallback g_onPreset;
+EffectStateCallback g_onEffectState;
+TunerFrameCallback g_onTunerFrame;
+
+// BLE notifications don't align to message boundaries - a logical
+// F0 01 ... F7 chunk can span several separate notification packets, so raw
+// bytes are accumulated here and split on F7, mirroring
+// BleBackend._handle_notification_bytes in the Python reference.
+std::vector<uint8_t> g_rxStream;
+
+// Multi-chunk preset-read reassembly state (CMD 0x01/0x03, SUB_CMD 0x01).
+std::vector<uint8_t> g_presetAccum;
+int g_presetSeqInFlight = -1;
+
+// Non-blocking settle timer for handleActivePatchKnown() (see its comment):
+// -1 = nothing pending. Checked from loop() (main task), not from inside the
+// NimBLE notification callback.
+int g_pendingPresetReadPatch0Based = -1;
+uint32_t g_pendingPresetReadAtMs = 0;
+
+void setState(ConnectionState newState) {
+  if (g_state == newState) return;
+  g_state = newState;
+  if (g_onConnectionState) g_onConnectionState(newState);
+}
+
+bool writeRaw(const spark_protocol::Bytes& payload) {
+  if (g_state != ConnectionState::kConnected || !g_writeChar) return false;
+  return g_writeChar->writeValue(payload.data(), payload.size(), false);
+}
+
+// Called whenever we learn which patch is active - either the device's own
+// confirmation after a patch-change command (CMD 0x03/SUB_CMD 0x38) or the
+// answer to an explicit "which patch is active" query (SUB_CMD 0x10). Both
+// cases end the same way in the reference client: notify the caller, then
+// (after a short settle pause, since the switch may not have finished
+// applying yet) read that patch's chain so effect toggles have fresh names
+// to work with.
+//
+// This runs inside the NimBLE notification callback (the NimBLE host task,
+// not the Arduino loop() task) - a blocking delay() here was tried first and
+// suspected of causing intermittent missed/lost preset reads right after
+// connecting (patch number/name staying blank), since it stalls the BLE
+// host stack's own processing for the full settle duration at exactly the
+// moment the link is least settled. Fixed by arming a non-blocking timer
+// here instead and polling it from spark_ble::loop() (main task) - see
+// g_pendingPresetReadAtMs above.
+void handleActivePatchKnown(uint8_t patch0Based) {
+  if (g_onPatchConfirmed) g_onPatchConfirmed(patch0Based);
+  g_pendingPresetReadPatch0Based = patch0Based;
+  g_pendingPresetReadAtMs = millis() + config::kPostPatchSettleMs;
+}
+
+void processChunk(const spark_protocol::Bytes& chunk) {
+  // Find the F0 01 frame start within the chunk (mirrors the reference's
+  // chunk.find(b"\xF0\x01") - in practice it's always at offset 0 once
+  // split on F7, but this stays defensive against leading garbage).
+  constexpr size_t kNotFound = static_cast<size_t>(-1);
+  size_t start = kNotFound;
+  for (size_t i = 0; i + 1 < chunk.size(); ++i) {
+    if (chunk[i] == 0xF0 && chunk[i + 1] == 0x01) {
+      start = i;
+      break;
+    }
+  }
+  if (start == kNotFound || chunk.size() - start < 7) return;
+
+  spark_protocol::Bytes frame(chunk.begin() + start, chunk.end());
+  uint8_t seq = frame[2];
+  uint8_t cmd = frame[4];
+  uint8_t subCmd = frame[5];
+  spark_protocol::Bytes packed(frame.begin() + 6, frame.end() - 1);  // drop trailing F7
+  spark_protocol::Bytes data8 = spark_protocol::unpack7Bit(packed);
+
+  if ((cmd == 0x01 || cmd == 0x03) && subCmd == 0x01 && data8.size() >= 3) {
+    if (static_cast<int>(seq) != g_presetSeqInFlight) {
+      // Belongs to a request we're no longer waiting on - accumulating it
+      // anyway would corrupt the current reassembly.
+      return;
+    }
+    uint8_t numChunks = data8[0];
+    uint8_t thisChunk = data8[1];
+    g_presetAccum.insert(g_presetAccum.end(), data8.begin() + 3, data8.end());
+    if (thisChunk >= numChunks - 1) {
+      spark_protocol::PresetData preset;
+      if (spark_protocol::parsePresetData(g_presetAccum, preset) && g_onPreset) {
+        g_onPreset(preset);
+      }
+      g_presetAccum.clear();
+      g_presetSeqInFlight = -1;
+    }
+  } else if (cmd == 0x03 && subCmd == 0x38 && data8.size() >= 2) {
+    // Patch-change confirmation: [1 byte unknown][1 byte: new preset number].
+    g_pendingPatchNumber0Based = -1;
+    handleActivePatchKnown(data8[1]);
+  } else if (cmd == 0x04 && subCmd == 0x38) {
+    // Generic ack for a patch-change command - no payload, so the new patch
+    // number isn't in this message at all. Use what we ourselves asked for
+    // (see sendPatch()) instead of the device's echo.
+    if (g_pendingPatchNumber0Based >= 0) {
+      uint8_t patch0Based = static_cast<uint8_t>(g_pendingPatchNumber0Based);
+      g_pendingPatchNumber0Based = -1;
+      handleActivePatchKnown(patch0Based);
+    }
+  } else if (cmd == 0x04 && subCmd == 0x15) {
+    // Generic ack for an effect-toggle command - no payload, so the
+    // name/on-off aren't in this message. Use what we ourselves just asked
+    // for (see toggleEffect()) instead of the device's echo, exactly like
+    // the CMD 0x04/SUB_CMD 0x38 patch-change case above.
+    if (g_pendingEffectName.length() > 0 && g_onEffectState) {
+      spark_protocol::EffectStateEvent event;
+      event.name = g_pendingEffectName;
+      event.on = g_pendingEffectOn;
+      g_pendingEffectName = "";
+      g_onEffectState(event);
+    }
+  } else if (cmd == 0x03 && subCmd == 0x15 && data8.size() >= 2) {
+    g_pendingEffectName = "";
+    spark_protocol::EffectStateEvent event;
+    if (spark_protocol::parseEffectStateEvent(data8, event) && g_onEffectState) {
+      g_onEffectState(event);
+    }
+  } else if (cmd == 0x03 && subCmd == 0x10 && data8.size() >= 2) {
+    uint8_t patch0Based;
+    if (spark_protocol::parseActivePatchEvent(data8, patch0Based)) {
+      handleActivePatchKnown(patch0Based);
+    }
+  }
+}
+
+void handleNotificationBytes(const uint8_t* data, size_t length) {
+  g_rxStream.insert(g_rxStream.end(), data, data + length);
+
+  // Tuner data frames are sent as raw (non-7bit-packed) 14-byte messages, so
+  // try that parse first on each freshly-completed F7-terminated chunk
+  // before falling through to the packed-message path above.
+  while (true) {
+    auto it = std::find(g_rxStream.begin(), g_rxStream.end(), 0xF7);
+    if (it == g_rxStream.end()) break;
+    spark_protocol::Bytes chunk(g_rxStream.begin(), it + 1);
+    g_rxStream.erase(g_rxStream.begin(), it + 1);
+
+    spark_protocol::TunerFrame tunerFrame;
+    if (spark_protocol::parseTunerFrame(chunk, tunerFrame)) {
+      if (g_onTunerFrame) g_onTunerFrame(tunerFrame);
+      continue;
+    }
+    processChunk(chunk);
+  }
+}
+
+void notifyCallback(NimBLERemoteCharacteristic* /*pChar*/, uint8_t* pData, size_t length,
+                     bool /*isNotify*/) {
+  ++g_rawNotificationCount;
+  // Harmless to always compile in: goes out over Serial (UART pins unless a
+  // build has CDC enabled, e.g. the bletest env - see platformio.ini), never
+  // blocks anything. Having the actual raw bytes of every notification is
+  // what actually let a real bug get diagnosed here, as opposed to counters
+  // alone.
+  Serial.printf("[BLE RX %u] ", (unsigned)length);
+  for (size_t i = 0; i < length; ++i) Serial.printf("%02X ", pData[i]);
+  Serial.println();
+  handleNotificationBytes(pData, length);
+}
+
+class ClientCallbacks : public NimBLEClientCallbacks {
+  void onDisconnect(NimBLEClient* /*pClient*/) override {
+    g_writeChar = nullptr;
+    g_rxStream.clear();
+    g_presetAccum.clear();
+    g_presetSeqInFlight = -1;
+    setState(ConnectionState::kDisconnected);
+  }
+};
+
+ClientCallbacks g_clientCallbacks;
+
+// Target address found by runScan(), carried over to the next loop()
+// iteration for connectToTarget() to use.
+NimBLEAddress g_pendingTargetAddress;
+
+// Blocking scan (up to kBleScanTimeoutMs). Only sets kDisconnected on
+// failure - success moves to kConnecting via the caller (loop()), which then
+// waits for the *next* iteration to actually run connectToTarget(). This
+// one-iteration gap is deliberate: it's what lets main.cpp's own top-level
+// loop() draw "Scanning..."/"Connecting..." from a normal, safe redraw
+// pass in between, instead of needing to draw from inside a callback nested
+// deep in this call chain (an earlier attempt at that - rendering directly
+// from the state-changed callback while still inside this function - was
+// suspected of interfering with the scan itself on real hardware; connection
+// got stuck showing "Scanning..." forever after that change).
+bool runScan() {
+  NimBLEScan* pScan = NimBLEDevice::getScan();
+  pScan->setActiveScan(true);
+  // NimBLEScanResults::getDevice(i) returns by value, so the match is copied
+  // out as an address rather than kept as a pointer into the (soon to go out
+  // of scope) results object.
+  NimBLEScanResults results = pScan->start(config::kBleScanTimeoutMs / 1000, false);
+
+  for (int i = 0; i < results.getCount(); ++i) {
+    NimBLEAdvertisedDevice device = results.getDevice(i);
+    if (device.haveName()) {
+      String name = device.getName().c_str();
+      if (name.indexOf(config::kSparkNameFilter) >= 0) {
+        g_pendingTargetAddress = device.getAddress();
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+// Blocking connect + service/characteristic discovery + subscribe (up to
+// kBleConnectTimeoutMs), against g_pendingTargetAddress (set by runScan() the
+// previous loop() iteration). Returns true on success.
+bool connectToTarget() {
+  if (!g_client) {
+    g_client = NimBLEDevice::createClient();
+    g_client->setClientCallbacks(&g_clientCallbacks, false);
+  }
+  g_client->setConnectTimeout(config::kBleConnectTimeoutMs / 1000);
+
+  if (!g_client->connect(g_pendingTargetAddress)) return false;
+
+  NimBLERemoteService* service = g_client->getService(kServiceUuid);
+  if (!service) {
+    g_client->disconnect();
+    return false;
+  }
+
+  g_writeChar = service->getCharacteristic(kWriteCharUuid);
+  NimBLERemoteCharacteristic* notifyChar = service->getCharacteristic(kNotifyCharUuid);
+
+  if (!g_writeChar || !notifyChar || !notifyChar->canNotify()) {
+    g_client->disconnect();
+    return false;
+  }
+
+  g_rxStream.clear();
+  g_presetAccum.clear();
+  g_presetSeqInFlight = -1;
+
+  // NimBLERemoteCharacteristic::subscribe() silently reports success even
+  // when it can't find the CCCD (0x2902) descriptor to actually write - it
+  // just sets the local callback and returns true, without ever telling the
+  // peripheral to start sending notifications (confirmed by reading this
+  // exact NimBLE-Arduino version's source: setNotify() returns true on "CCCD
+  // not found" as well as on a real successful write). Forcing a fresh
+  // descriptor discovery first (getDescriptors(true)) did NOT fix
+  // rawNotificationCount() staying at 0 on real hardware even with
+  // subscribe() reporting true - so checking for the CCCD explicitly here,
+  // separately from subscribe()'s own ambiguous return value, to find out
+  // whether it's genuinely present or not.
+  notifyChar->getDescriptors(true);
+  NimBLERemoteDescriptor* cccd = notifyChar->getDescriptor(NimBLEUUID((uint16_t)0x2902));
+  g_cccdFound = (cccd != nullptr);
+  // sub:Y and cccd:Y confirmed on real hardware (CCCD found, write reported
+  // success) yet rawNotificationCount() still stayed at 0 - trying a
+  // write-WITH-response for the CCCD (default is write-without-response) in
+  // case the peripheral silently drops the unacknowledged write.
+  g_lastSubscribeOk = notifyChar->subscribe(true, notifyCallback, true /* response */);
+
+  g_seq = spark_protocol::SeqCounter();
+  setState(ConnectionState::kConnected);
+
+  delay(config::kPostConnectSettleMs);
+  requestActivePatch();
+  return true;
+}
+
+}  // namespace
+
+void begin() { NimBLEDevice::init(""); }
+
+void loop() {
+  // Non-blocking counterpart to handleActivePatchKnown()'s settle pause -
+  // see its comment. Checked unconditionally (not just while kConnected) so
+  // it still fires even if a disconnect races with it; requestPreset()
+  // itself is a no-op if not connected (see writeRaw()).
+  if (g_pendingPresetReadPatch0Based >= 0 && millis() >= g_pendingPresetReadAtMs) {
+    uint8_t patch0Based = static_cast<uint8_t>(g_pendingPresetReadPatch0Based);
+    g_pendingPresetReadPatch0Based = -1;
+    requestPreset(patch0Based);
+  }
+
+  if (g_state == ConnectionState::kConnected) {
+    if (g_forceReconnectRequested) {
+      g_forceReconnectRequested = false;
+      if (g_client) g_client->disconnect();  // onDisconnect() moves state to kDisconnected
+    }
+    return;
+  }
+
+  uint32_t now = millis();
+
+  switch (g_state) {
+    case ConnectionState::kDisconnected:
+      if (now - g_lastAttemptMs < config::kReconnectRetryIntervalMs) return;
+      g_lastAttemptMs = now;
+      // Only flips the state here - the scan itself (runScan(), blocking)
+      // happens next iteration, once this state change has had a chance to
+      // be drawn. See runScan()'s comment for why.
+      setState(ConnectionState::kScanning);
+      return;
+
+    case ConnectionState::kScanning:
+      if (!runScan()) {
+        setState(ConnectionState::kDisconnected);
+        return;
+      }
+      // Same reasoning as above: connectToTarget() (blocking) waits for the
+      // next iteration so "Connecting..." gets drawn first.
+      setState(ConnectionState::kConnecting);
+      return;
+
+    case ConnectionState::kConnecting:
+      if (!connectToTarget()) setState(ConnectionState::kDisconnected);
+      return;
+
+    case ConnectionState::kConnected:
+      return;  // handled above; unreachable
+  }
+}
+
+bool isConnected() { return g_state == ConnectionState::kConnected; }
+ConnectionState state() { return g_state; }
+
+uint32_t rawNotificationCount() { return g_rawNotificationCount; }
+bool lastSubscribeOk() { return g_lastSubscribeOk; }
+bool cccdFound() { return g_cccdFound; }
+
+bool sendPatch(uint8_t patchNumber1Based) {
+  spark_protocol::Bytes payload = spark_protocol::buildPatchPayload(patchNumber1Based, g_seq.consume());
+  if (payload.empty()) return false;
+  g_pendingPatchNumber0Based = patchNumber1Based - 1;
+  return writeRaw(payload);
+}
+
+bool tunerStart() {
+  return writeRaw(spark_protocol::buildTunerStartPayload(g_seq.consume()));
+}
+
+bool tunerStop() {
+  return writeRaw(spark_protocol::buildTunerStopPayload(g_seq.consume()));
+}
+
+bool toggleEffect(const String& internalName, bool on) {
+  bool ok = writeRaw(spark_protocol::buildEffectTogglePayload(internalName, on, g_seq.consume()));
+  if (ok) {
+    g_pendingEffectName = internalName;
+    g_pendingEffectOn = on;
+  }
+  return ok;
+}
+
+bool requestPreset(uint8_t presetNum0Based) {
+  uint8_t seq = g_seq.consume();
+  g_presetSeqInFlight = seq;
+  g_presetAccum.clear();
+  return writeRaw(spark_protocol::buildPresetRequestPayload(presetNum0Based, seq));
+}
+
+bool requestActivePatch() {
+  return writeRaw(spark_protocol::buildActivePatchRequestPayload(g_seq.consume()));
+}
+
+bool setGuitarVolume(float value) {
+  return writeRaw(spark_protocol::buildMixerPayload(spark_protocol::kMixerChannelGuitar, value,
+                                                      g_seq.consume()));
+}
+
+bool tapTempo(float bpm) {
+  return writeRaw(spark_protocol::buildTapTempoPayload(bpm, g_seq.consume()));
+}
+
+void forceReconnect() { g_forceReconnectRequested = true; }
+
+void onConnectionStateChanged(ConnectionStateCallback cb) { g_onConnectionState = std::move(cb); }
+void onPatchConfirmed(PatchConfirmedCallback cb) { g_onPatchConfirmed = std::move(cb); }
+void onPreset(PresetCallback cb) { g_onPreset = std::move(cb); }
+void onEffectState(EffectStateCallback cb) { g_onEffectState = std::move(cb); }
+void onTunerFrame(TunerFrameCallback cb) { g_onTunerFrame = std::move(cb); }
+
+}  // namespace spark_ble
