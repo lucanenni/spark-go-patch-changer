@@ -65,6 +65,12 @@ std::vector<uint8_t> g_rxStream;
 std::vector<uint8_t> g_presetAccum;
 int g_presetSeqInFlight = -1;
 
+// Non-blocking settle timer for handleActivePatchKnown() (see its comment):
+// -1 = nothing pending. Checked from loop() (main task), not from inside the
+// NimBLE notification callback.
+int g_pendingPresetReadPatch0Based = -1;
+uint32_t g_pendingPresetReadAtMs = 0;
+
 void setState(ConnectionState newState) {
   if (g_state == newState) return;
   g_state = newState;
@@ -84,16 +90,18 @@ bool writeRaw(const spark_protocol::Bytes& payload) {
 // applying yet) read that patch's chain so effect toggles have fresh names
 // to work with.
 //
-// Note: this runs inside the NimBLE notification callback (the NimBLE host
-// task, not the Arduino loop() task), so the delay() below briefly blocks
-// that task rather than the whole firmware. 300ms is short and matches the
-// reference client's own settle pause, but if real-hardware testing shows
-// missed/delayed notifications right after a patch change, replace this
-// with a non-blocking timer armed here and polled from spark_ble::loop().
+// This runs inside the NimBLE notification callback (the NimBLE host task,
+// not the Arduino loop() task) - a blocking delay() here was tried first and
+// suspected of causing intermittent missed/lost preset reads right after
+// connecting (patch number/name staying blank), since it stalls the BLE
+// host stack's own processing for the full settle duration at exactly the
+// moment the link is least settled. Fixed by arming a non-blocking timer
+// here instead and polling it from spark_ble::loop() (main task) - see
+// g_pendingPresetReadAtMs above.
 void handleActivePatchKnown(uint8_t patch0Based) {
   if (g_onPatchConfirmed) g_onPatchConfirmed(patch0Based);
-  delay(config::kPostPatchSettleMs);
-  requestPreset(patch0Based);
+  g_pendingPresetReadPatch0Based = patch0Based;
+  g_pendingPresetReadAtMs = millis() + config::kPostPatchSettleMs;
 }
 
 void processChunk(const spark_protocol::Bytes& chunk) {
@@ -305,6 +313,16 @@ bool connectToTarget() {
 void begin() { NimBLEDevice::init(""); }
 
 void loop() {
+  // Non-blocking counterpart to handleActivePatchKnown()'s settle pause -
+  // see its comment. Checked unconditionally (not just while kConnected) so
+  // it still fires even if a disconnect races with it; requestPreset()
+  // itself is a no-op if not connected (see writeRaw()).
+  if (g_pendingPresetReadPatch0Based >= 0 && millis() >= g_pendingPresetReadAtMs) {
+    uint8_t patch0Based = static_cast<uint8_t>(g_pendingPresetReadPatch0Based);
+    g_pendingPresetReadPatch0Based = -1;
+    requestPreset(patch0Based);
+  }
+
   if (g_state == ConnectionState::kConnected) {
     if (g_forceReconnectRequested) {
       g_forceReconnectRequested = false;

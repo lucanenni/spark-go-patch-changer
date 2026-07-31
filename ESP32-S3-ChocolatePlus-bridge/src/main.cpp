@@ -98,6 +98,13 @@ void setup() {
   // unconditionally every loop() iteration (see below), not from these
   // callbacks - simpler than trying to catch every path that changes what's
   // on screen.
+  // setActivePatch() shows the patch *number* as soon as it's known, rather
+  // than waiting on the slower multi-chunk preset read (applyPreset()) that
+  // also carries the patch *name* - decouples the two, since the preset read
+  // occasionally not completing (e.g. right after connecting) shouldn't
+  // leave the number blank too.
+  spark_ble::onPatchConfirmed(
+      [](uint8_t patch0Based) { spark_state::setActivePatch(patch0Based); });
   spark_ble::onPreset(
       [](const spark_protocol::PresetData& preset) { spark_state::applyPreset(preset); });
   spark_ble::onEffectState(
