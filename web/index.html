@@ -46,10 +46,22 @@
 
   <div class="panel" data-label="Send patch" data-i18n-label="panel_send_patch">
     <div class="footswitches">
-      <button class="fsw" data-patch="1" disabled><span class="dot"></span>1</button>
-      <button class="fsw" data-patch="2" disabled><span class="dot"></span>2</button>
-      <button class="fsw" data-patch="3" disabled><span class="dot"></span>3</button>
-      <button class="fsw" data-patch="4" disabled><span class="dot"></span>4</button>
+      <div class="fsw-cell">
+        <button class="fsw" data-patch="1" disabled><span class="dot"></span>1</button>
+        <div class="fsw-name" id="patchName0">—</div>
+      </div>
+      <div class="fsw-cell">
+        <button class="fsw" data-patch="2" disabled><span class="dot"></span>2</button>
+        <div class="fsw-name" id="patchName1">—</div>
+      </div>
+      <div class="fsw-cell">
+        <button class="fsw" data-patch="3" disabled><span class="dot"></span>3</button>
+        <div class="fsw-name" id="patchName2">—</div>
+      </div>
+      <div class="fsw-cell">
+        <button class="fsw" data-patch="4" disabled><span class="dot"></span>4</button>
+        <div class="fsw-name" id="patchName3">—</div>
+      </div>
     </div>
   </div>
 
@@ -58,6 +70,33 @@
       <button id="btnTunerOn" class="primary" disabled data-i18n="btn_tuner_on">Tuner ON</button>
       <button id="btnTunerOff" class="danger" disabled data-i18n="btn_tuner_off">Tuner OFF</button>
     </div>
+  </div>
+
+  <div class="panel" data-label="Guitar volume" data-i18n-label="panel_mixer">
+    <div class="row mixer-row">
+      <input type="range" id="guitarVolume" min="0" max="1" step="0.01" value="0.5" disabled>
+      <span id="guitarVolumeLabel">50%</span>
+    </div>
+  </div>
+
+  <div class="panel" data-label="Tap tempo" data-i18n-label="panel_tap_tempo">
+    <div class="row">
+      <button id="btnTapTempo" class="primary" disabled data-i18n="btn_tap">TAP</button>
+      <span id="tapTempoDisplay" data-i18n="tap_tempo_none">tap to set tempo</span>
+    </div>
+    <div class="panel-note" id="patchBpmNote" data-i18n="patch_bpm_unknown">Patch tempo: —</div>
+  </div>
+
+  <div class="panel" data-label="Pedal chain" data-i18n-label="panel_chain">
+    <div class="chain-preset" id="chainPresetLabel" data-i18n="chain_none">Not read yet.</div>
+    <div class="chain-header-row">
+      <div data-i18n="chain_header_slot">Slot</div>
+      <div data-i18n="chain_header_pedal">Pedal (internal name)</div>
+      <div data-i18n="chain_header_state">State</div>
+      <div></div>
+      <div data-i18n="chain_header_params">Parameters</div>
+    </div>
+    <div id="chainRows"></div>
   </div>
 
   <div class="panel" data-label="Tuner display (raw, uncalibrated)" data-i18n-label="panel_tuner_display">
@@ -83,6 +122,10 @@
 
   <details class="log-panel">
     <summary data-i18n="log_title">Log</summary>
+    <div class="log-actions">
+      <button id="btnLogExport" data-i18n="log_export">Export</button>
+      <button id="btnLogClear" data-i18n="log_clear">Clear</button>
+    </div>
     <div id="log"></div>
   </details>
 
