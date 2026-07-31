@@ -87,8 +87,14 @@ void showBootSplash() {
   tft.setTextColor(kFg, kBg);
   printCentered("Bridge", 92);
 
+  // "MVave -> Spark GO" as one line is wider than the 80px portrait screen
+  // (17 chars * 6px/char at text size 1 = 102px) - centering it then draws
+  // starting at a negative X, clipping the first ~2 characters off the left
+  // edge. Split across two lines instead, each well under the ~13-char
+  // budget this screen actually has room for.
   tft.setTextColor(TFT_DARKGREY, kBg);
-  printCentered("MVave -> Spark GO", 115);
+  printCentered("MVave ->", 112);
+  printCentered("Spark GO", 124);
 }
 
 void showStatus(const String& connectionLine, int currentPatch1Based, const String& lastEventLine) {

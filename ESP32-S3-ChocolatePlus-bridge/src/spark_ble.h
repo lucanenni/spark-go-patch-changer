@@ -8,9 +8,13 @@
 // for an unattended embedded client than the desktop app's fixed-handle
 // shortcut.
 //
-// Known limitation: (re)connect attempts (scan + connect) block for their
-// duration - acceptable since they're rare (startup + occasional
-// reconnects), but USB-MIDI input isn't serviced while one is in flight.
+// Known limitation: the scan and connect phases each still block for their
+// own duration - acceptable since they're rare (startup + occasional
+// reconnects), but USB-MIDI input isn't serviced while one is in flight. The
+// two phases are split across separate loop() iterations (see loop()'s own
+// comments) so the display gets a chance to show "Scanning..."/
+// "Connecting..." in between - each phase individually still blocks, only
+// the transition between them doesn't.
 
 #include <Arduino.h>
 

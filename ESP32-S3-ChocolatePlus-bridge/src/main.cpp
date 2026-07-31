@@ -29,11 +29,14 @@ bool g_wasTunerOn = false;
 constexpr uint32_t kBootSplashHoldMs = 1200;
 
 // Renders the pre-connection/connection-lost diagnostic view right now, from
-// whatever spark_ble/spark_state currently report. Called both from loop()
-// every iteration and (for two specific states - see
-// handleConnectionStateChanged() below) directly from the connection-state
-// callback, which is what actually lets "Scanning..."/"Connecting..." reach
-// the screen at all.
+// whatever spark_ble/spark_state currently report. Called from loop() every
+// iteration - see spark_ble::loop()'s own comments for why its scan/connect
+// attempts are now split across loop() iterations (kScanning/kConnecting are
+// each set one iteration before the matching blocking call actually runs):
+// that's what lets this ordinary top-level redraw show "Scanning..." and
+// "Connecting..." at all, without needing to draw from inside spark_ble's
+// own call chain or callback (an earlier attempt at the latter was
+// suspected of interfering with the scan itself on real hardware).
 void renderStatusView() {
   int patch0Based = spark_state::activePatch0Based();
   // rx/sub/cccd are diagnostics (see spark_ble::rawNotificationCount/
@@ -49,28 +52,11 @@ void renderStatusView() {
 // Serial goes out over the TX/RX pins (GPIO43/44), not the main USB-A plug
 // (that one's dedicated to USB-MIDI) - so seeing these needs an external
 // USB-serial adapter wired to those pins, not just the same USB cable used
-// to flash. See README.md.
+// to flash. See README.md. Deliberately Serial-only, no display calls here -
+// see renderStatusView()'s comment.
 void handleConnectionStateChanged(spark_ble::ConnectionState state) {
   Serial.print("[BLE] ");
   Serial.println(connectionStateText(state));
-
-  // attemptConnect() (scan, then connect) blocks on the main loop() task for
-  // its whole duration before returning - without this, "Scanning..." and
-  // "Connecting..." would never actually reach the screen, since loop()'s own
-  // redraw only runs once attemptConnect() has already finished. Only these
-  // two states are safe to draw from here: both are only ever set from
-  // inside attemptConnect(), which only ever runs on the main task (called
-  // synchronously from spark_ble::loop(), itself only called from this
-  // file's loop()). kDisconnected can also arrive from NimBLE's own host
-  // task (ClientCallbacks::onDisconnect, a different task than the one
-  // driving this TFT_eSPI instance elsewhere) - deliberately left to loop()'s
-  // next iteration instead, which happens fast enough anyway since nothing
-  // blocks loop() once disconnected.
-  bool isScanningOrConnecting = state == spark_ble::ConnectionState::kScanning ||
-                                state == spark_ble::ConnectionState::kConnecting;
-  if (isScanningOrConnecting && !tuner::isOn()) {
-    renderStatusView();
-  }
 }
 
 }  // namespace

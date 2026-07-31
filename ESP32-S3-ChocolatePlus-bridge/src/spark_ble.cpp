@@ -207,13 +207,21 @@ class ClientCallbacks : public NimBLEClientCallbacks {
 
 ClientCallbacks g_clientCallbacks;
 
-// Blocking scan + connect attempt. Returns true on success. Kept as a single
-// synchronous step (rather than a fully async state machine) since it only
-// runs at startup and on rare reconnects - see the header's documented
-// limitation about USB-MIDI not being serviced meanwhile.
-bool attemptConnect() {
-  setState(ConnectionState::kScanning);
+// Target address found by runScan(), carried over to the next loop()
+// iteration for connectToTarget() to use.
+NimBLEAddress g_pendingTargetAddress;
 
+// Blocking scan (up to kBleScanTimeoutMs). Only sets kDisconnected on
+// failure - success moves to kConnecting via the caller (loop()), which then
+// waits for the *next* iteration to actually run connectToTarget(). This
+// one-iteration gap is deliberate: it's what lets main.cpp's own top-level
+// loop() draw "Scanning..."/"Connecting..." from a normal, safe redraw
+// pass in between, instead of needing to draw from inside a callback nested
+// deep in this call chain (an earlier attempt at that - rendering directly
+// from the state-changed callback while still inside this function - was
+// suspected of interfering with the scan itself on real hardware; connection
+// got stuck showing "Scanning..." forever after that change).
+bool runScan() {
   NimBLEScan* pScan = NimBLEDevice::getScan();
   pScan->setActiveScan(true);
   // NimBLEScanResults::getDevice(i) returns by value, so the match is copied
@@ -221,42 +229,34 @@ bool attemptConnect() {
   // of scope) results object.
   NimBLEScanResults results = pScan->start(config::kBleScanTimeoutMs / 1000, false);
 
-  bool found = false;
-  NimBLEAddress targetAddress;
   for (int i = 0; i < results.getCount(); ++i) {
     NimBLEAdvertisedDevice device = results.getDevice(i);
     if (device.haveName()) {
       String name = device.getName().c_str();
       if (name.indexOf(config::kSparkNameFilter) >= 0) {
-        targetAddress = device.getAddress();
-        found = true;
-        break;
+        g_pendingTargetAddress = device.getAddress();
+        return true;
       }
     }
   }
+  return false;
+}
 
-  if (!found) {
-    setState(ConnectionState::kDisconnected);
-    return false;
-  }
-
-  setState(ConnectionState::kConnecting);
-
+// Blocking connect + service/characteristic discovery + subscribe (up to
+// kBleConnectTimeoutMs), against g_pendingTargetAddress (set by runScan() the
+// previous loop() iteration). Returns true on success.
+bool connectToTarget() {
   if (!g_client) {
     g_client = NimBLEDevice::createClient();
     g_client->setClientCallbacks(&g_clientCallbacks, false);
   }
   g_client->setConnectTimeout(config::kBleConnectTimeoutMs / 1000);
 
-  if (!g_client->connect(targetAddress)) {
-    setState(ConnectionState::kDisconnected);
-    return false;
-  }
+  if (!g_client->connect(g_pendingTargetAddress)) return false;
 
   NimBLERemoteService* service = g_client->getService(kServiceUuid);
   if (!service) {
     g_client->disconnect();
-    setState(ConnectionState::kDisconnected);
     return false;
   }
 
@@ -265,7 +265,6 @@ bool attemptConnect() {
 
   if (!g_writeChar || !notifyChar || !notifyChar->canNotify()) {
     g_client->disconnect();
-    setState(ConnectionState::kDisconnected);
     return false;
   }
 
@@ -306,18 +305,43 @@ bool attemptConnect() {
 void begin() { NimBLEDevice::init(""); }
 
 void loop() {
-  if (g_state == ConnectionState::kConnected && !g_forceReconnectRequested) return;
-
-  uint32_t now = millis();
-  if (g_state == ConnectionState::kConnected && g_forceReconnectRequested) {
-    g_forceReconnectRequested = false;
-    if (g_client) g_client->disconnect();
-    return;  // onDisconnect() callback will move state to kDisconnected
+  if (g_state == ConnectionState::kConnected) {
+    if (g_forceReconnectRequested) {
+      g_forceReconnectRequested = false;
+      if (g_client) g_client->disconnect();  // onDisconnect() moves state to kDisconnected
+    }
+    return;
   }
 
-  if (now - g_lastAttemptMs < config::kReconnectRetryIntervalMs) return;
-  g_lastAttemptMs = now;
-  attemptConnect();
+  uint32_t now = millis();
+
+  switch (g_state) {
+    case ConnectionState::kDisconnected:
+      if (now - g_lastAttemptMs < config::kReconnectRetryIntervalMs) return;
+      g_lastAttemptMs = now;
+      // Only flips the state here - the scan itself (runScan(), blocking)
+      // happens next iteration, once this state change has had a chance to
+      // be drawn. See runScan()'s comment for why.
+      setState(ConnectionState::kScanning);
+      return;
+
+    case ConnectionState::kScanning:
+      if (!runScan()) {
+        setState(ConnectionState::kDisconnected);
+        return;
+      }
+      // Same reasoning as above: connectToTarget() (blocking) waits for the
+      // next iteration so "Connecting..." gets drawn first.
+      setState(ConnectionState::kConnecting);
+      return;
+
+    case ConnectionState::kConnecting:
+      if (!connectToTarget()) setState(ConnectionState::kDisconnected);
+      return;
+
+    case ConnectionState::kConnected:
+      return;  // handled above; unreachable
+  }
 }
 
 bool isConnected() { return g_state == ConnectionState::kConnected; }
