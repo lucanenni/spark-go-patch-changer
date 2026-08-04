@@ -79,6 +79,9 @@ std::vector<uint8_t> g_rxStream;
 // Multi-chunk preset-read reassembly state (CMD 0x01/0x03, SUB_CMD 0x01).
 std::vector<uint8_t> g_presetAccum;
 int g_presetSeqInFlight = -1;
+// millis() when the current in-flight request (if any) was sent - used to
+// abandon it if it never completes (see loop()'s pending-timer comment).
+uint32_t g_presetRequestSentAtMs = 0;
 
 // Non-blocking settle timer for handleActivePatchKnown() (see its comment):
 // -1 = nothing pending. Checked from loop() (main task), not from inside the
@@ -345,10 +348,33 @@ void loop() {
   // see its comment. Checked unconditionally (not just while kConnected) so
   // it still fires even if a disconnect races with it; requestPreset()
   // itself is a no-op if not connected (see writeRaw()).
+  // REAL BUG, found on real hardware 2026-08-04 (via the NM-TV-154 ports,
+  // which copied this file unchanged): firing a new requestPreset() while a
+  // PREVIOUS one's multi-chunk response was still being reassembled
+  // (g_presetSeqInFlight != -1) left the display's patch name permanently
+  // stuck on an old, no-longer-active patch after rapid patch changes on
+  // NM-TV-154 - did NOT self-correct even after waiting. Suspected cause:
+  // the Spark GO gets confused by a second read request arriving
+  // mid-transmission of the first one's response and never replies to the
+  // second. Fixed by deferring instead of firing immediately whenever a
+  // reassembly is still in flight, so requests never overlap - except if
+  // the in-flight one has itself been outstanding longer than
+  // kPresetReadTimeoutMs, treated as abandoned/lost so a stuck reassembly
+  // can't block new reads forever. Likely present here all along too (this
+  // file is unchanged) but probably not noticed, since footswitch-driven
+  // patch changes are naturally slower/more deliberate than the amp-panel
+  // button testing that exposed it.
   if (g_pendingPresetReadPatch0Based >= 0 && millis() >= g_pendingPresetReadAtMs) {
-    uint8_t patch0Based = static_cast<uint8_t>(g_pendingPresetReadPatch0Based);
-    g_pendingPresetReadPatch0Based = -1;
-    requestPreset(patch0Based);
+    bool priorReadStillInFlight =
+        g_presetSeqInFlight != -1 &&
+        (millis() - g_presetRequestSentAtMs) < config::kPresetReadTimeoutMs;
+    if (priorReadStillInFlight) {
+      g_pendingPresetReadAtMs = millis() + config::kPostPatchSettleMs;
+    } else {
+      uint8_t patch0Based = static_cast<uint8_t>(g_pendingPresetReadPatch0Based);
+      g_pendingPresetReadPatch0Based = -1;
+      requestPreset(patch0Based);
+    }
   }
 
   if (g_state == ConnectionState::kConnected) {
@@ -424,6 +450,7 @@ bool toggleEffect(const String& internalName, bool on) {
 bool requestPreset(uint8_t presetNum0Based) {
   uint8_t seq = g_seq.consume();
   g_presetSeqInFlight = seq;
+  g_presetRequestSentAtMs = millis();
   g_presetAccum.clear();
   return writeRaw(spark_protocol::buildPresetRequestPayload(presetNum0Based, seq));
 }

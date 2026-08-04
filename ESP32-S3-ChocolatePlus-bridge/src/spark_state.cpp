@@ -27,7 +27,26 @@ void reset() {
 }
 
 void applyPreset(const spark_protocol::PresetData& preset) {
-  g_activePatch0Based = preset.presetNum;
+  // REAL BUG, found on real hardware 2026-08-04 (via the NM-TV-154 ports,
+  // which copied this file unchanged): a preset read reflects saved data
+  // for whichever slot was requested at request time, but the read itself
+  // is slow (multi-chunk reassembly over BLE) - if the active patch
+  // changes again (a real-time CMD 0x03/SUB_CMD 0x38 confirmation, handled
+  // fast via setActivePatch()) before this read finishes arriving,
+  // applying it unconditionally overwrites the already-correct, more
+  // recent patch number *and* name with stale data for a patch that's no
+  // longer active. Confirmed on real hardware (NM-TV-154): rapid patch
+  // changes left the display showing a patch number and name belonging to
+  // two different, both-stale patches, neither matching the amp's actual
+  // active patch. Fixed by only applying a preset read if its patch number
+  // still matches what's currently considered active - a stale read is
+  // dropped instead, and a fresh read for the now-current patch (already
+  // requested via the same settle-timer mechanism in spark_ble.cpp)
+  // supersedes it correctly once it arrives. Likely present here all along
+  // too (this file is unchanged) but probably not noticed, since
+  // footswitch-driven patch changes over USB-MIDI are naturally slower/more
+  // deliberate than the amp-panel button testing that exposed it.
+  if (preset.presetNum != g_activePatch0Based) return;
   g_activePatchName = preset.name;
   for (uint8_t i = 0; i < spark_protocol::kSlotCount; ++i) {
     if (i < preset.pedalCount) {

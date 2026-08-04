@@ -13,6 +13,12 @@ inline constexpr uint32_t kBleConnectTimeoutMs = 15000;
 inline constexpr uint32_t kReconnectRetryIntervalMs = 3000;
 inline constexpr uint32_t kPostConnectSettleMs = 300;  // mirrors the reference client's pause
 inline constexpr uint32_t kPostPatchSettleMs = 300;
+// How long a preset-read request is given to fully arrive before it's
+// treated as abandoned/lost and a new one is allowed to be sent - see
+// spark_ble.cpp's loop() comment for the real bug this avoids (overlapping
+// preset-read requests during rapid patch changes left the display's patch
+// name stuck forever - found on the NM-TV-154 ports, this file unchanged).
+inline constexpr uint32_t kPresetReadTimeoutMs = 4000;
 
 // --- USB-MIDI (from the Chocolate Plus's HOST port) ---
 // 0 = omni (listen on every channel). Set 1-16 to restrict to a single

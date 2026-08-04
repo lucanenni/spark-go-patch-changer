@@ -77,6 +77,31 @@ drive a Neural DSP Nano Cortex from it) - so this dongle enumerates as a
   counters alone, since it can hex-dump every raw BLE notification straight
   to Serial without needing the Chocolate Plus at all (there's no
   CDC/TinyUSB conflict when nothing in the build touches USB-MIDI).
+- **Two more real bugs found 2026-08-04 - via the NM-TV-154 ports (which
+  copied `spark_state.cpp`/`spark_ble.cpp` unchanged from here), then
+  ported back to this project. Neither has been re-verified against real
+  ESP32-S3 dongle hardware** (only compile-checked here - the NM-TV-154
+  testing that found and fixed them used real hardware, this board wasn't
+  available at the time):
+  - `spark_state.cpp`'s `applyPreset()` used to overwrite the active patch
+    *number*, not just the name, with whatever a (slow, multi-chunk) preset
+    read returned - if the active patch changed again before a stale read
+    finished arriving, this clobbered the already-correct, more recent
+    number and name with data for a patch that's no longer active. Fixed
+    by only applying a read if its patch number still matches what's
+    currently considered active.
+  - `spark_ble.cpp` could fire a new preset-read request while a previous
+    one was still being reassembled - suspected to confuse the Spark GO
+    into never replying to the second request, permanently stranding the
+    display on a stale patch name (confirmed on NM-TV-154 hardware: this
+    does not self-correct by waiting). Fixed by deferring a new request
+    until the prior one completes or times out
+    (`config::kPresetReadTimeoutMs`, 4s).
+  - Both bugs are most likely to show up with **rapid** patch changes
+    (multiple changes within a second or two of each other) - normal
+    footswitch-paced use may rarely or never trigger them, which is
+    probably why they went unnoticed here despite the code being unchanged
+    since this project's original hardware validation.
 - Tap Tempo computes a BPM locally from the last few tap intervals
   (resetting after a >2s gap, same logic as `desktop/spark_go_gui.py`) and
   sends it fresh on every tap; there's no protocol-level start/stop. Guitar
